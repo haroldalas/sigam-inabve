@@ -203,6 +203,11 @@ input.campo-num { text-align: right; max-width: 120px; }
 .paso { display: flex; gap: 10px; align-items: center; font-weight: 700; color: var(--azul); margin-bottom: 8px; }
 .paso span { width: 26px; height: 26px; border-radius: 50%; background: var(--azul); color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: .8rem; }
 .dui { font-size: 1.4rem; letter-spacing: .12em; font-variant-numeric: tabular-nums; max-width: 260px; }
+.dui-grande { font-size: 1.9rem; padding: 10px 14px; max-width: 300px; border-width: 2px; }
+.dui-grande:focus { border-color: var(--dorado, #b47d25); box-shadow: 0 0 0 3px rgba(180,125,37,.25); }
+.info-dui { display: block; margin-top: 4px; }
+.info-dui-alerta { color: var(--warn); font-weight: 700; }
+.resumen-despacho { font-weight: 600; color: var(--azul); padding: 0 6px; }
 .progreso { height: 8px; background: var(--azul-claro); border-radius: 99px; overflow: hidden; }
 .progreso > div { height: 100%; background: var(--ok); transition: width .2s; }
 

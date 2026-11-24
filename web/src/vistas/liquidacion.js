@@ -133,7 +133,7 @@ function cargar(alTerminar) {
     h('label', { class: 'fila-campo' }, h('span', {}, 'Archivo (.xlsx o .csv)'), archivo), zona);
 }
 
-async function leerArchivo(file) {
+export async function leerArchivo(file) {
   if (/\.csv$/i.test(file.name)) {
     const texto = await file.text();
     const [cab, ...lineas] = texto.split(/\r?\n/).filter(Boolean);

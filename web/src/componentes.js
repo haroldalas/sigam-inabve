@@ -4,7 +4,7 @@ import { productos, productoPorCodigo, buscarProductos, sb, q } from './api.js';
 import { escanearConCamara, camaraDisponible } from './escaner.js';
 
 // Buscador de producto: lector USB (Enter), cámara o texto (nombre, código, principio activo)
-export function buscadorProducto({ alElegir, placeholder = 'Escanee o escriba nombre, código o principio activo', autofocus = true, filtro } = {}) {
+export function buscadorProducto({ alElegir, placeholder = 'Escanee o escriba nombre, código o principio activo', autofocus = true, filtro, alEnterVacio } = {}) {
   const lista = h('div', { class: 'sugerencias', role: 'listbox' });
   const input = h('input', { class: 'campo campo-busqueda', type: 'search', placeholder, autocomplete: 'off', inputmode: 'search', autofocus });
   let resultados = [];
@@ -24,7 +24,7 @@ export function buscadorProducto({ alElegir, placeholder = 'Escanee o escriba no
   input.addEventListener('keydown', async e => {
     if (e.key !== 'Enter') return;
     e.preventDefault();
-    const t = input.value.trim(); if (!t) return;
+    const t = input.value.trim(); if (!t) { if (alEnterVacio) alEnterVacio(); return; }
     const p = await productoPorCodigo(t);
     if (p && (!filtro || filtro(p))) return elegir(p);
     if (resultados.length === 1) return elegir(resultados[0]);
@@ -37,6 +37,7 @@ export function buscadorProducto({ alElegir, placeholder = 'Escanee o escriba no
     }) }, '📷 Cámara') : null;
   return h('div', { class: 'buscador' }, h('div', { class: 'buscador-fila' }, input, camara), lista);
 }
+export const enfocarBuscador = raiz => raiz.querySelector('.campo-busqueda')?.focus();
 
 // Existencias por lote de un producto en una bodega (activos y no vencidos, en orden PVPS)
 export async function lotesDisponibles(bodegaId, productoId) {

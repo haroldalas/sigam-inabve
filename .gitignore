@@ -9,3 +9,5 @@ seed/*.sql
 seed/control_existencias.csv
 carga_supabase/*.sql
 *.xlsm
+.netlify
+__pycache__/

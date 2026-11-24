@@ -1,7 +1,9 @@
 // Despacho (salidas): beneficiario con DUI o personal (pequeña cirugía). Funciona sin conexión.
+// Flujo rápido: 1) DUI (al completar 9 dígitos salta solo al escáner) 2) escanear productos
+// 3) Enter en el buscador vacío o Ctrl+Enter registra y vuelve al DUI para el siguiente paciente.
 import { h, toast, error, num, fecha, fechaHora, chipsProducto, tabla, estadoChip, confirmar, pedirTexto, select, TIPO_BODEGA } from '../ui.js';
 import { sb, q, rpc, estado, bodegasOperables, registrarSalida, listarPendientes, descartarPendiente, sincronizar, productoPorCodigo, hoyISO } from '../api.js';
-import { buscadorProducto, lotesDisponibles, resumenLotes, textoLote } from '../componentes.js';
+import { buscadorProducto, enfocarBuscador, lotesDisponibles, resumenLotes, textoLote } from '../componentes.js';
 import { escanearConCamara, camaraDisponible } from '../escaner.js';
 
 const MODO_KEY = 'sigam:modo_escaneo';
@@ -19,8 +21,43 @@ export default async function () {
   const zonaLineas = h('div', { class: 'lineas' });
   const zonaPendientes = h('div');
   const zonaRecientes = h('div');
-  const dui = h('input', { class: 'campo dui', inputmode: 'numeric', placeholder: '000000000', autocomplete: 'off', 'aria-label': 'DUI (9 dígitos, sin guion)' });
-  dui.addEventListener('input', () => { dui.value = dui.value.replace(/\D/g, '').slice(0, 9); dui.classList.toggle('campo-ok', dui.value.length === 9); });
+  const dui = h('input', { class: 'campo dui dui-grande', inputmode: 'numeric', placeholder: '000000000', autocomplete: 'off', 'aria-label': 'DUI (9 dígitos, sin guion)' });
+  const infoDui = h('small', { class: 'nota info-dui' });
+  let duiAnterior = '';
+  dui.addEventListener('input', () => {
+    dui.value = dui.value.replace(/\D/g, '').slice(0, 9);
+    const ok = dui.value.length === 9;
+    dui.classList.toggle('campo-ok', ok);
+    if (ok && dui.value !== duiAnterior) { duiAnterior = dui.value; ultimoDespacho(dui.value); enfocarBuscador(raiz); }
+    if (!ok) { duiAnterior = ''; infoDui.textContent = ''; }
+    pintarResumen();
+  });
+  dui.addEventListener('keydown', e => {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    if (dui.value.length === 9) { if (st.lineas.some(l => l.cantidad > 0)) guardar(); else enfocarBuscador(raiz); }
+    else toast('El DUI debe tener 9 dígitos, sin guion', 'error');
+  });
+  // aviso de despacho reciente al mismo DUI (evita entregar dos veces la misma receta)
+  const ultimoDespacho = async v => {
+    infoDui.textContent = '';
+    if (!navigator.onLine) return;
+    try {
+      const [u] = await q(sb.from('salidas').select('numero,fecha,creado_at,bodega_id,salida_detalle(cantidad)')
+        .eq('dui', v).eq('estado', 'confirmada').order('id', { ascending: false }).limit(1));
+      if (dui.value !== v) return;
+      if (!u) { infoDui.textContent = 'Sin despachos anteriores registrados en SIGAM.'; infoDui.className = 'nota info-dui'; return; }
+      const dias = Math.round((Date.parse(hoyISO()) - Date.parse(u.fecha)) / 864e5);
+      infoDui.textContent = `Último despacho: ${u.numero} · ${fecha(u.fecha)}${dias === 0 ? ' (HOY)' : ` (hace ${dias} día${dias === 1 ? '' : 's'})`} · ${u.salida_detalle.length} producto(s) · ${estado.bodegas.find(b => b.id === u.bodega_id)?.nombre || ''}`;
+      infoDui.className = 'nota info-dui' + (dias <= 1 ? ' info-dui-alerta' : '');
+    } catch { /* sin bloqueo */ }
+  };
+  const resumen = h('div', { class: 'resumen-despacho' });
+  const pintarResumen = () => {
+    const ls = st.lineas.filter(l => l.cantidad > 0);
+    const quien = st.tipo === 'beneficiario' ? (dui.value.length === 9 ? `DUI ${dui.value}` : 'DUI pendiente') : (recibe.value.trim() || 'Indique quién recibe');
+    resumen.textContent = `${quien} · ${ls.length} producto(s) · ${num(ls.reduce((a, l) => a + l.cantidad, 0))} unidades`;
+  };
   const recibe = h('input', { class: 'campo', placeholder: 'Nombre de quien recibe' });
   const solicita = h('input', { class: 'campo', placeholder: 'Quien solicita (si es otra persona)' });
   const obs = h('input', { class: 'campo', placeholder: 'Observación (opcional)' });
@@ -42,8 +79,8 @@ export default async function () {
   const pintarLineas = () => {
     zonaLineas.replaceChildren(...(st.lineas.length ? st.lineas.map(l => {
       const cant = h('input', { class: 'campo campo-num', type: 'number', min: 0, step: 'any', value: l.cantidad || '', 'aria-label': 'Cantidad' });
-      cant.addEventListener('input', () => { l.cantidad = Number(cant.value) || 0; marcar(); });
-      cant.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); raiz.querySelector('.campo-busqueda')?.focus(); } });
+      cant.addEventListener('input', () => { l.cantidad = Number(cant.value) || 0; marcar(); pintarResumen(); });
+      cant.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); if (e.ctrlKey || e.metaKey) guardar(); else enfocarBuscador(raiz); } });
       const insuf = l.disponible !== null && l.cantidad > l.disponible;
       const fila = h('div', { class: 'linea' + (insuf ? ' error' : ''), 'data-p': l.p.id },
         h('div', { class: 'linea-nombre' }, h('strong', {}, l.p.nombre_comercial, ' ', chipsProducto(l.p)),
@@ -58,13 +95,15 @@ export default async function () {
       const marcar = () => fila.classList.toggle('error', l.disponible !== null && l.cantidad > l.disponible);
       return fila;
     }) : [h('p', { class: 'nota' }, 'Escanee los productos de la receta o búsquelos por nombre.')]));
+    pintarResumen();
   };
 
   // ---------------------------------------------------------------- guardar
   const guardar = async () => {
     const lineas = st.lineas.filter(l => l.cantidad > 0);
-    if (!lineas.length) return toast('Agregue al menos un producto con cantidad', 'error');
-    if (st.tipo === 'beneficiario' && !/^\d{9}$/.test(dui.value)) { dui.focus(); return toast('Escriba el DUI con 9 dígitos, sin guion', 'error'); }
+    if (btnGuardar.disabled) return;
+    if (!lineas.length) { enfocarBuscador(raiz); return toast('Agregue al menos un producto con cantidad', 'error'); }
+    if (st.tipo === 'beneficiario' && !/^\d{9}$/.test(dui.value)) { dui.focus(); dui.select(); return toast('Escriba el DUI con 9 dígitos, sin guion', 'error'); }
     if (st.tipo === 'personal' && !recibe.value.trim()) { recibe.focus(); return toast('Indique quién recibe', 'error'); }
     const excede = lineas.find(l => l.disponible !== null && l.cantidad > l.disponible);
     if (excede) return toast(`${excede.p.nombre_comercial}: la cantidad supera la existencia (${num(excede.disponible)})`, 'error');
@@ -78,14 +117,14 @@ export default async function () {
     btnGuardar.disabled = true;
     try {
       const r = await registrarSalida(payload);
-      if (r.enviado) toast(`Despacho ${r.numero} registrado`);
+      if (r.enviado) toast(`✔ Despacho ${r.numero} registrado · DUI ${payload.dui || payload.persona_recibe}`);
       else toast('Sin conexión: el despacho quedó guardado en este equipo y se enviará solo al volver la señal', 'info', 7000);
-      st.lineas = []; dui.value = ''; dui.classList.remove('campo-ok'); recibe.value = ''; solicita.value = ''; obs.value = '';
+      st.lineas = []; dui.value = ''; duiAnterior = ''; infoDui.textContent = ''; dui.classList.remove('campo-ok'); recibe.value = ''; solicita.value = ''; obs.value = '';
       pintarLineas(); pintarPendientes(); pintarRecientes();
       (st.tipo === 'beneficiario' ? dui : recibe).focus();
     } catch (e) { error(e); } finally { btnGuardar.disabled = false; }
   };
-  const btnGuardar = h('button', { class: 'btn btn-primario btn-grande', onclick: guardar }, '✔ Registrar despacho');
+  const btnGuardar = h('button', { class: 'btn btn-primario btn-grande', onclick: guardar, title: 'Ctrl+Enter' }, '✔ Registrar despacho');
 
   // ---------------------------------------------------------------- pendientes sin conexión
   const pintarPendientes = async () => {
@@ -140,10 +179,10 @@ export default async function () {
   const pintarTipo = () => {
     zonaTipo.replaceChildren(
       h('div', { class: 'segmentado', role: 'group', 'aria-label': 'Tipo de salida' },
-        h('button', { class: st.tipo === 'beneficiario' ? 'activo' : '', onclick: () => { st.tipo = 'beneficiario'; pintarTipo(); } }, 'Beneficiario'),
-        h('button', { class: st.tipo === 'personal' ? 'activo' : '', onclick: () => { st.tipo = 'personal'; pintarTipo(); } }, 'Personal (pequeña cirugía)')),
+        h('button', { class: st.tipo === 'beneficiario' ? 'activo' : '', onclick: () => { st.tipo = 'beneficiario'; pintarTipo(); dui.focus(); } }, 'Beneficiario'),
+        h('button', { class: st.tipo === 'personal' ? 'activo' : '', onclick: () => { st.tipo = 'personal'; pintarTipo(); recibe.focus(); } }, 'Personal (pequeña cirugía)')),
       st.tipo === 'beneficiario'
-        ? h('label', { class: 'fila-campo', style: { marginTop: '10px' } }, h('span', {}, 'DUI del beneficiario (9 dígitos, sin guion)'), dui)
+        ? h('label', { class: 'fila-campo', style: { marginTop: '10px' } }, h('span', {}, 'DUI (9 dígitos, sin guion) · al completarlo pasa solo al escáner'), dui, infoDui)
         : h('div', { class: 'fila', style: { marginTop: '10px' } },
           h('label', { class: 'fila-campo' }, h('span', {}, 'Recibe'), recibe),
           h('label', { class: 'fila-campo' }, h('span', {}, 'Solicita'), solicita)));
@@ -161,7 +200,20 @@ export default async function () {
     if (p) { await agregar(p); } else toast(`El código ${cod} no está en el catálogo`, 'error');
   }, { continuo: true, titulo: st.modo === 'B' ? 'Cada lectura suma 1' : 'Escanee cada producto' }) }, '📷 Escanear varios con la cámara') : null;
 
+  const limpiar = () => {
+    st.lineas = []; dui.value = ''; duiAnterior = ''; infoDui.textContent = ''; dui.classList.remove('campo-ok');
+    pintarLineas(); (st.tipo === 'beneficiario' ? dui : recibe).focus();
+  };
+  recibe.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); solicita.focus(); } });
+  solicita.addEventListener('keydown', e => { if (e.key === 'Enter') { e.preventDefault(); enfocarBuscador(raiz); } });
+  recibe.addEventListener('input', () => pintarResumen());
+  raiz.addEventListener('keydown', e => {
+    if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); guardar(); }
+    else if (e.key === 'Escape' && !document.querySelector('.modal-fondo')) { e.preventDefault(); limpiar(); }
+  });
+
   pintarTipo(); pintarModo(); pintarLineas(); pintarPendientes(); pintarRecientes();
+  setTimeout(() => (st.tipo === 'beneficiario' ? dui : recibe).focus(), 60);
   raiz.append(
     zonaPendientes,
     h('section', { class: 'tarjeta' },
@@ -169,16 +221,17 @@ export default async function () {
         h('label', { class: 'fila-campo' }, h('span', {}, 'Despachar desde'), selBodega),
         h('div', { class: 'fila-campo', style: { flex: '0 0 auto' } }, h('span', {}, 'Forma de escaneo'), zonaModo)),
       h('div', { style: { height: '12px' } }),
-      h('div', { class: 'paso' }, h('span', {}, '1'), 'Quién recibe'), zonaTipo,
+      h('div', { class: 'paso' }, h('span', {}, '1'), 'DUI del beneficiario / quién recibe'), zonaTipo,
       h('div', { style: { height: '16px' } }),
-      h('div', { class: 'paso' }, h('span', {}, '2'), 'Productos'),
+      h('div', { class: 'paso' }, h('span', {}, '2'), 'Escanear productos'),
       h('div', { class: 'fila', style: { alignItems: 'flex-start' } },
-        h('div', { style: { flex: '3 1 360px' } }, buscadorProducto({ alElegir: p => agregar(p) })), camaraContinua),
+        h('div', { style: { flex: '3 1 360px' } }, buscadorProducto({ alElegir: p => agregar(p), autofocus: false, alEnterVacio: () => guardar() })), camaraContinua),
       zonaLineas,
       h('label', { class: 'fila-campo' }, h('span', {}, 'Observación'), obs),
       h('div', { class: 'botones', style: { marginTop: '14px' } }, btnGuardar,
-        h('button', { class: 'btn btn-sec', onclick: () => { st.lineas = []; pintarLineas(); } }, 'Limpiar'),
-        h('span', { class: 'nota' }, 'El sistema entrega primero el lote que vence antes (PVPS).'))),
+        h('button', { class: 'btn btn-sec', onclick: () => limpiar() }, 'Limpiar'),
+        resumen,
+        h('span', { class: 'nota' }, 'Atajos: Enter en el buscador vacío o Ctrl+Enter registra · Esc limpia. Se entrega primero el lote que vence antes (PVPS).'))),
     zonaRecientes);
   return raiz;
 }
