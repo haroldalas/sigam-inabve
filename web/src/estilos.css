@@ -289,3 +289,4 @@ input.campo-num { text-align: right; max-width: 120px; }
   .segmentado button { flex: 1 1 auto; padding: 8px 10px; font-size: .8rem; }
   .fila > .fila-campo[style] { flex: 1 1 100% !important; }
 }
+.btn-enlace { background: none; border: 0; padding: 0; color: var(--azul); text-decoration: underline; cursor: pointer; font: inherit; text-align: left; }

@@ -59,6 +59,9 @@ export const ESTADOS = {
   activo: ['Activo', 'st-ok'], bloqueado: ['Bloqueado', 'st-danger'], cuarentena: ['Cuarentena', 'st-warn'], agotado: ['Agotado', 'st-muted'],
   vencido: ['Vencido', 'st-danger'], critico: ['Crítico', 'st-danger'], por_vencer: ['Por vencer', 'st-warn'],
   agotado_n: ['Agotado', 'st-danger'], por_agotarse: ['Por agotarse', 'st-warn'],
+  en_revision: ['En revisión', 'st-warn'], conforme: ['Conforme', 'st-ok'], con_observaciones: ['Con observaciones', 'st-danger'],
+  coincide: ['Coincide', 'st-ok'], monto_distinto: ['Monto distinto', 'st-danger'], no_ingresada: ['No ingresada', 'st-danger'],
+  fecha_distinta: ['No ingresada (mismo número, otra fecha)', 'st-danger'], anulada_en_sigam: ['Anulada en SIGAM', 'st-danger'],
 };
 export const estadoChip = (e, alt) => { const [t, c] = ESTADOS[alt || e] || [e, '']; return h('span', { class: 'estado ' + c }, t); };
 export const TIPO_BODEGA = {

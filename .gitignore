@@ -11,3 +11,4 @@ carga_supabase/*.sql
 *.xlsm
 .netlify
 __pycache__/
+web/public/ocr/

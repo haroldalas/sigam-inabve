@@ -1,8 +1,8 @@
 // SOLO PARA PRUEBAS LOCALES: imita la parte de Supabase (PostgREST + Auth) que usa SIGAM,
 // sobre la base Postgres local, con el rol "authenticated" y RLS activos como en producción.
 import http from 'node:http';
-import { readFileSync, existsSync, statSync } from 'node:fs';
-import { join, extname } from 'node:path';
+import { readFileSync, existsSync, statSync, writeFileSync, mkdirSync, rmSync } from 'node:fs';
+import { join, extname, dirname } from 'node:path';
 import pg from 'pg';
 
 const DIST = process.argv[2] || '/home/claude/sigam/web/dist';
@@ -162,13 +162,37 @@ function json(res, status, body, extra = {}) {
   res.end(body === null || status === 204 ? '' : JSON.stringify(body));
 }
 
-const TIPOS = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.woff': 'font/woff' };
+// Almacenamiento mínimo (imita Supabase Storage) en /tmp/sigam_storage
+const ALM = '/tmp/sigam_storage';
+function almacenamiento(req, res, url, binario, cuerpo) {
+  const p = decodeURIComponent(url.pathname.replace('/storage/v1/object/', ''));
+  if (p.startsWith('sign/')) {
+    const ruta = p.slice(5);
+    if (req.method === 'POST') return json(res, 200, { signedURL: `/object/sign/${ruta}?token=prueba` });
+    const f = join(ALM, ruta); if (!existsSync(f)) return json(res, 404, { message: 'Object not found' });
+    res.writeHead(200, { 'content-type': f.endsWith('.pdf') ? 'application/pdf' : 'image/jpeg' }); return res.end(readFileSync(f));
+  }
+  if (req.method === 'POST' || req.method === 'PUT') {
+    const f = join(ALM, p); mkdirSync(dirname(f), { recursive: true }); writeFileSync(f, binario);
+    return json(res, 200, { Key: p, Id: p });
+  }
+  if (req.method === 'DELETE') {
+    const { prefixes = [] } = JSON.parse(cuerpo || '{}'); const b = p.replace(/\/$/, '');
+    prefixes.forEach(x => { const f = join(ALM, b, x); if (existsSync(f)) rmSync(f); });
+    return json(res, 200, prefixes.map(name => ({ name })));
+  }
+  return json(res, 400, { message: 'no soportado' });
+}
+
+const TIPOS = { '.wasm': 'application/wasm', '.mjs': 'text/javascript', '.gz': 'application/gzip', '.pdf': 'application/pdf', '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.png': 'image/png', '.jpg': 'image/jpeg', '.webmanifest': 'application/manifest+json', '.woff2': 'font/woff2', '.woff': 'font/woff' };
 http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://localhost');
-  let cuerpo = ''; req.on('data', d => cuerpo += d); await new Promise(r => req.on('end', r));
+  const trozos = []; req.on('data', d => trozos.push(d)); await new Promise(r => req.on('end', r));
+  const binario = Buffer.concat(trozos); const cuerpo = binario.toString('utf8');
   try {
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' }); return res.end(); }
     if (url.pathname.startsWith('/rest/v1/')) return await rest(req, res, url.pathname, url, cuerpo);
+    if (url.pathname.startsWith('/storage/v1/')) return almacenamiento(req, res, url, binario, cuerpo);
     if (url.pathname.startsWith('/auth/v1/user')) {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
       const sub = JSON.parse(Buffer.from(token.split('.')[1], 'base64url')).sub;
@@ -179,7 +203,7 @@ http.createServer(async (req, res) => {
     let f = join(DIST, url.pathname === '/' ? 'index.html' : url.pathname);
     if (!existsSync(f) || statSync(f).isDirectory()) f = join(DIST, 'index.html');
     const h = { 'content-type': TIPOS[extname(f)] || 'application/octet-stream' };
-    if (CSP && extname(f) === '.html') h['content-security-policy'] = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self'; connect-src 'self'; media-src 'self' blob:; worker-src 'self'; frame-ancestors 'none'";
+    if (CSP && extname(f) === '.html') h['content-security-policy'] = "default-src 'self'; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; font-src 'self' data:; script-src 'self' 'wasm-unsafe-eval'; connect-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; frame-ancestors 'none'";
     res.writeHead(200, h); res.end(readFileSync(f));
   } catch (e) {
     json(res, 400, { message: e.message, code: e.code, details: e.detail, hint: e.hint });

@@ -21,6 +21,7 @@ const RUTAS = {
   pendientes:   { t: 'Bandeja de revisión',  i: '✅', roles: ['administrador'], v: () => import('./vistas/pendientes.js') },
   lotes:        { t: 'Bloqueo de lotes',     i: '⛔', roles: ['administrador'], v: () => import('./vistas/lotes.js') },
   tablero:      { t: 'Tablero de consumo',   i: '📊', roles: ['administrador'], v: () => import('./vistas/tablero.js') },
+  polizas:      { t: 'Pólizas CEFAFA',       i: '🧮', roles: ['administrador'], v: () => import('./vistas/polizas.js') },
   conciliacion: { t: 'Conciliar con SIVET',  i: '🔁', roles: ['administrador'], v: () => import('./vistas/conciliacion.js') },
   liquidacion:  { t: 'Liquidación',          i: '💵', roles: ['administrador'], v: () => import('./vistas/liquidacion.js') },
   admin:        { t: 'Administración',       i: '⚙️', roles: ['administrador'], v: () => import('./vistas/admin.js') },
@@ -29,7 +30,7 @@ const GRUPOS = [
   ['General', ['inicio', 'existencias']],
   ['Operación', ['despacho', 'recepcion', 'traslados', 'entradas']],
   ['Inventario', ['conteo', 'ajustes', 'devoluciones', 'kardex']],
-  ['Coordinación', ['pendientes', 'lotes', 'tablero', 'conciliacion', 'liquidacion', 'admin']],
+  ['Coordinación', ['pendientes', 'lotes', 'tablero', 'polizas', 'conciliacion', 'liquidacion', 'admin']],
 ];
 
 const app = $('#app');

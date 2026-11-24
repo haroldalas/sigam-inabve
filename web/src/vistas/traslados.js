@@ -116,7 +116,8 @@ async function bitacora() {
   const hasta = h('input', { type: 'date', class: 'campo', value: hoyISO() });
   const selEstado = select([['', 'Todos'], ['enviado', 'En tránsito'], ['recibido', 'Recibido'], ['con_diferencias', 'Con diferencias'], ['cerrado', 'Cerrado'], ['anulado', 'Anulado']], '');
   const selSede = select([['', 'Todas'], ...estado.sedes.map(s => [s.nombre, s.nombre])], '');
-  const selSivet = select([['', 'Todos'], ['no', 'Pendientes de enviar a TICS'], ['si', 'Ya enviados a TICS']], '');
+  const selSivet = select([['', 'Todos'], ['falta_efectivo', 'Falta hacerse efectivo en SIVET'], ['efectivo', 'Ya efectivos en SIVET'], ['no', 'Pendientes de enviar a TICS'], ['si', 'Ya enviados a TICS']], '');
+  const avisoSivet = h('div');
   const zona = h('div');
   const marcados = new Set();
 
@@ -125,10 +126,12 @@ async function bitacora() {
     let c = () => sb.from('v_bitacora_traslados').select('*').gte('fecha', desde.value).lte('fecha', hasta.value).order('fecha', { ascending: false }).order('id', { ascending: false });
     const filas = (await todas(c)).filter(r => (!selEstado.value || r.estado === selEstado.value)
       && (!selSede.value || r.sede_destino === selSede.value || r.sede_origen === selSede.value)
-      && (!selSivet.value || (selSivet.value === 'si') === r.enviado_sivet));
+      && (!selSivet.value || (selSivet.value === 'falta_efectivo' ? (!r.sivet_efectivo && r.estado !== 'anulado')
+        : selSivet.value === 'efectivo' ? r.sivet_efectivo : (selSivet.value === 'si') === r.enviado_sivet)));
+    pintarAvisoSivet();
     marcados.clear();
     zona.replaceChildren(
-      h('p', { class: 'nota' }, `${filas.length} traslados · ${dinero(filas.reduce((s, r) => s + Number(r.monto || 0), 0))}`),
+      h('p', { class: 'nota' }, `${filas.length} traslados · ${dinero(filas.reduce((s, r) => s + Number(r.monto || 0), 0))} · efectivos en SIVET: ${filas.filter(r => r.sivet_efectivo).length} · faltan: ${filas.filter(r => !r.sivet_efectivo && r.estado !== 'anulado').length}`),
       tabla([
         { t: '', f: r => { const c = h('input', { type: 'checkbox', 'aria-label': 'Marcar ' + r.numero, onclick: e => e.stopPropagation() }); c.onchange = () => c.checked ? marcados.add(r.id) : marcados.delete(r.id); return c; } },
         { t: 'Número', k: 'numero' }, { t: 'Fecha', f: r => fecha(r.fecha), ord: r => r.fecha },
@@ -137,7 +140,7 @@ async function bitacora() {
         { t: 'Líneas', k: 'lineas', num: true }, { t: 'Unidades', k: 'unidades_enviadas', num: true },
         { t: 'Monto', f: r => dinero(r.monto), num: true, ord: r => Number(r.monto) },
         { t: 'Estado', f: r => h('div', {}, estadoChip(r.estado), r.diferencias_pendientes > 0 ? h('div', { class: 'nota' }, `${r.diferencias_pendientes} diferencia(s) por resolver`) : null) },
-        { t: 'TICS', f: r => r.enviado_sivet ? h('span', { class: 'estado st-ok' }, 'Enviado') : h('span', { class: 'estado st-muted' }, 'Pendiente') },
+        { t: 'SIVET', f: r => chipSivet(r), ord: r => r.estado === 'anulado' ? 3 : r.sivet_efectivo ? 2 : r.enviado_sivet ? 1 : 0 },
         { t: 'Envió', k: 'enviado_por' }, { t: 'Recibió', k: 'recibido_por' },
       ], filas, { alClic: r => detalle(r, cargar), vacio: 'No hay traslados en este período' }));
   };
@@ -150,7 +153,20 @@ async function bitacora() {
       if (esAdmin() && await confirmar('Enviado a TICS', '¿Marcar estos traslados como enviados a TICS para migrar a SIVET?', 'Marcar')) {
         await rpc('marcar_enviado_sivet', { p_traslados: [...marcados] }); cargar();
       }
-    } }, '⬇ Excel para TICS de los marcados'));
+    } }, '⬇ Excel para TICS de los marcados'),
+    esAdmin() ? h('button', { class: 'btn btn-primario', onclick: async () => {
+      if (!marcados.size) return toast('Marque uno o más traslados', 'error');
+      if (await marcarEfectivo([...marcados])) cargar();
+    } }, '✔ Marcar efectivos en SIVET') : null);
+
+  const pintarAvisoSivet = async () => {
+    try {
+      const { count } = await q(sb.from('traslados').select('id', { count: 'exact', head: true }).eq('sivet_efectivo', false).neq('estado', 'anulado'));
+      avisoSivet.replaceChildren(count ? h('div', { class: 'aviso aviso-warn' }, `${count} traslado(s) en total aún no se han hecho efectivos en SIVET. `,
+        h('button', { class: 'btn btn-sec btn-peq', onclick: () => { desde.value = '2020-01-01'; hasta.value = hoyISO(); selSivet.value = 'falta_efectivo'; cargar(); } }, 'Ver todos'))
+        : h('div', { class: 'aviso aviso-ok' }, '✔ Todos los traslados ya están efectivos en SIVET.'));
+    } catch { avisoSivet.replaceChildren(); }
+  };
 
   [desde, hasta, selEstado, selSede, selSivet].forEach(c => c.addEventListener('change', cargar));
   cargar();
@@ -158,8 +174,8 @@ async function bitacora() {
     h('div', { class: 'filtros' },
       h('label', { class: 'fila-campo' }, h('span', {}, 'Desde'), desde), h('label', { class: 'fila-campo' }, h('span', {}, 'Hasta'), hasta),
       h('label', { class: 'fila-campo' }, h('span', {}, 'Estado'), selEstado), h('label', { class: 'fila-campo' }, h('span', {}, 'Sede'), selSede),
-      h('label', { class: 'fila-campo' }, h('span', {}, 'TICS'), selSivet)),
-    accionesLote, h('div', { style: { height: '10px' } }), zona);
+      h('label', { class: 'fila-campo' }, h('span', {}, 'SIVET'), selSivet)),
+    avisoSivet, accionesLote, h('div', { style: { height: '10px' } }), zona);
 }
 
 async function detalle(t, recargar) {
@@ -171,7 +187,8 @@ async function detalle(t, recargar) {
     h('div', { class: 'rejilla' },
       kv('Origen', `${t.bodega_origen} · ${t.sede_origen}`), kv('Destino', `${t.bodega_destino} · ${t.sede_destino}`),
       kv('Enviado', `${fechaHora(t.enviado_at)} · ${t.enviado_por || ''}`), kv('Recibido', t.recibido_at ? `${fechaHora(t.recibido_at)} · ${t.recibido_por || ''}` : 'Pendiente'),
-      kv('Estado', estadoChip(t.estado)), kv('Monto', dinero(t.monto))),
+      kv('Estado', estadoChip(t.estado)), kv('Monto', dinero(t.monto)),
+      kv('SIVET', h('div', {}, chipSivet(t), t.sivet_efectivo ? h('div', { class: 'nota' }, `${fechaHora(t.sivet_efectivo_at)} · ${t.sivet_efectivo_por || ''}${t.sivet_referencia ? ' · ref. ' + t.sivet_referencia : ''}`) : null))),
     t.observaciones ? h('p', {}, h('strong', {}, 'Observaciones: '), t.observaciones) : null,
     t.motivo_anulacion ? h('p', { class: 'aviso aviso-warn' }, `Anulado por ${t.anulado_por}: ${t.motivo_anulacion}`) : null,
     tabla([
@@ -196,7 +213,36 @@ async function detalle(t, recargar) {
   if (esAdmin() && !t.enviado_sivet) acciones.push({ texto: 'Marcar enviado a TICS', clase: 'btn-primario', accion: async () => {
     await rpc('marcar_enviado_sivet', { p_traslados: [t.id] }); toast('Marcado como enviado a TICS'); recargar();
   } });
+  if (esAdmin() && t.estado !== 'anulado') acciones.push(t.sivet_efectivo
+    ? { texto: 'Quitar marca de SIVET', clase: 'btn-sec', accion: async () => {
+        if (!await confirmar('Quitar marca', `${t.numero} volverá a quedar como pendiente de hacerse efectivo en SIVET.`, 'Quitar')) return false;
+        await rpc('marcar_efectivo_sivet', { p_traslados: [t.id], p_efectivo: false }); toast('Marca quitada'); recargar();
+      } }
+    : { texto: '✔ Efectivo en SIVET', clase: 'btn-primario', accion: async () => { if (!await marcarEfectivo([t.id])) return false; recargar(); } });
   modal(`Traslado ${t.numero} · ${fecha(t.fecha)}`, cont, { ancho: '1100px', acciones });
+}
+
+function chipSivet(r) {
+  if (r.estado === 'anulado') return h('span', { class: 'estado st-muted' }, '—');
+  if (r.sivet_efectivo) return h('span', { class: 'estado st-ok', title: r.sivet_referencia ? 'Referencia SIVET: ' + r.sivet_referencia : '' }, 'Efectivo');
+  if (r.enviado_sivet) return h('span', { class: 'estado st-info' }, 'Enviado a TICS');
+  return h('span', { class: 'estado st-warn' }, 'Pendiente');
+}
+
+// Pide (opcional) la referencia de SIVET y marca los traslados como efectivos
+function marcarEfectivo(ids) {
+  return new Promise(res => {
+    const ref = h('input', { class: 'campo', placeholder: 'Número o referencia en SIVET (opcional)' });
+    modal(ids.length === 1 ? 'Traslado efectivo en SIVET' : `${ids.length} traslados efectivos en SIVET`,
+      h('div', {}, h('p', {}, 'Confirme que el traslado ya quedó registrado (efectivo) en SIVET.'), h('label', { class: 'fila-campo' }, h('span', {}, 'Referencia SIVET'), ref)), {
+        acciones: [{ texto: 'Cancelar', clase: 'btn-sec', accion: () => res(false) },
+          { texto: '✔ Marcar efectivo', clase: 'btn-primario', accion: async () => {
+            const n = await rpc('marcar_efectivo_sivet', { p_traslados: ids, p_efectivo: true, p_referencia: ref.value.trim() || null });
+            toast(`${n} traslado(s) marcados como efectivos en SIVET`); res(true);
+          } }],
+        alCerrar: () => res(false),
+      });
+  });
 }
 
 const kv = (k, v) => h('div', {}, h('div', { class: 'kpi-titulo' }, k), h('div', {}, v));
