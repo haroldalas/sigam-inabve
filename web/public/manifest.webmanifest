@@ -1,0 +1,17 @@
+{
+  "name": "SIGAM-INABVE · Gestión de Abastecimiento Médico",
+  "short_name": "SIGAM",
+  "description": "Sistema Integrado de Gestión de Abastecimiento Médico del INABVE",
+  "lang": "es",
+  "start_url": "/#inicio",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#233152",
+  "theme_color": "#233152",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

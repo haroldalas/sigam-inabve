@@ -1,0 +1,8 @@
+SIGAM-INABVE · Carga de datos iniciales en Supabase
+
+1. Entra a supabase.com > proyecto SIGAM-INABVE > SQL Editor > New query.
+2. Abre parte_01.sql, copia todo, pégalo y presiona Run. Espera "Success".
+3. Repite en orden con parte_02 ... parte_07 (cada una en una consulta nueva).
+4. Ejecuta parte_99_verificacion.sql. Debe dar:
+   productos 1301 · lotes 7217 · facturas 2088 · salidas 9479 · traslados 251 · perfiles 49 · unidades 78888.50
+Si alguna parte da error, detente y avísame con el mensaje; no repitas partes ya cargadas.

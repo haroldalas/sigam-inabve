@@ -1,0 +1,11 @@
+node_modules/
+web/dist/
+*.log
+.DS_Store
+ejemplos/
+SIGAM_carga_datos.zip
+# Datos de beneficiarios y de inventario: NO van al repositorio (se generan con scripts/migrar_sifar.py)
+seed/*.sql
+seed/control_existencias.csv
+carga_supabase/*.sql
+*.xlsm
