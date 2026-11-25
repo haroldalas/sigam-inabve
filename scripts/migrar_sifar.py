@@ -316,7 +316,7 @@ tr_without_lote = sum(1 for r in td_rows if r[3] is None)
 if tr_without_lote: nota(f"- {tr_without_lote} líneas de traslado no tienen lote de origen identificable en SIFAR.")
 
 # --------------------------------------------------------------------------- usuarios
-ADMINS = {"oscar.rivas", "harold.alas", "jocelyn.flores", "josselin.aguillon", "cristian.segovia"}
+ADMINS = {"oscar.rivas", "harold.alas"}   # los demás solicitan su acceso desde SIGAM
 perf_rows, omit = [], []
 for u in T["tblUsuarios"]:
     red = str(u["UsuarioRed"] or "").strip().lower()

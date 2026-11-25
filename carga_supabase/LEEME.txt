@@ -4,5 +4,11 @@ SIGAM-INABVE · Carga de datos iniciales en Supabase
 2. Abre parte_01.sql, copia todo, pégalo y presiona Run. Espera "Success".
 3. Repite en orden con parte_02 ... parte_07 (cada una en una consulta nueva).
 4. Ejecuta parte_99_verificacion.sql. Debe dar:
-   productos 1301 · lotes 7217 · facturas 2088 · salidas 9479 · traslados 251 · perfiles 49 · unidades 78888.50
+   productos 1301 · lotes 7217 · facturas 2088 · salidas 9584 · traslados 251 · perfiles 50 · unidades 77710.50
 Si alguna parte da error, detente y avísame con el mensaje; no repitas partes ya cargadas.
+
+Datos: archivo SIFAR_INABVE_V.3.1.1_Existencias.xlsm del 24/11/2026 (cierre).
+Las existencias de Bodega Central, Pequeña Cirugía y Campo quedan como en SIFAR.
+Despacho de Medicamentos y Almacén de Insumos de cada sede se igualarán después a SIVET
+con los Excel de contratos (pantalla "Conciliar con SIVET").
+Administradores habilitados: oscar.rivas y harold.alas. El resto envía su solicitud desde SIGAM.
