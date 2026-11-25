@@ -16,7 +16,7 @@ export default async function (params) {
   return raiz;
 }
 
-const ROLES = [['administrador', 'Administrador'], ['dependiente', 'Dependiente'], ['consulta', 'Consulta']];
+const ROLES = [['administrador', 'Administrador'], ['dependiente', 'Dependiente'], ['jefatura', 'Jefatura'], ['consulta', 'Consulta']];
 
 // ----------------------------------------------------------------------------- usuarios
 async function usuarios() {
@@ -33,7 +33,7 @@ async function usuarios() {
       h('label', { class: 'fila-campo' }, h('span', {}, 'Nombre completo'), nombre),
       h('div', { class: 'fila' }, h('label', { class: 'fila-campo' }, h('span', {}, 'Rol'), rol), h('label', { class: 'fila-campo' }, h('span', {}, 'Sede'), sede)),
       h('label', { class: 'check' }, activo, 'Acceso habilitado'),
-      h('p', { class: 'nota' }, 'Dependiente: opera las bodegas de su sede. Consulta: ve existencias y dónde están (médicos, Contact Center). Administrador: todo.')), {
+      h('p', { class: 'nota' }, 'Dependiente: opera las bodegas de su sede. Jefatura: ve existencias, kardex y tableros de todas las sedes, sin operar. Consulta: ve existencias y medicamentos nuevos (médicos, Contact Center). Administrador: todo.')), {
       acciones: [
         ...(!nuevo && u.id && u.id !== estado.perfil.id ? [
           { texto: '🗑 Eliminar cuenta', clase: 'btn-peligro', accion: async () => {
@@ -83,7 +83,7 @@ async function usuarios() {
         kv('Rol que tenía en SIFAR', NOM_ROL[u.rol_sugerido] || 'No estaba en SIFAR'), kv('Enviada', fechaHora(u.solicitado_at))),
       u.comentario ? h('p', {}, h('strong', {}, 'Comentario: '), u.comentario) : null,
       h('div', { class: 'fila', style: { marginTop: '12px' } }, h('label', { class: 'fila-campo' }, h('span', {}, 'Rol que se asigna'), rol), h('label', { class: 'fila-campo' }, h('span', {}, 'Sede'), sede)),
-      h('p', { class: 'nota' }, 'Dependiente: opera las bodegas de su sede. Consulta: ve existencias y dónde están. Administrador: todo.')), {
+      h('p', { class: 'nota' }, 'Dependiente: opera las bodegas de su sede. Jefatura: ve existencias, kardex y tableros de todas las sedes. Consulta: ve existencias y medicamentos nuevos. Administrador: todo.')), {
       acciones: [
         { texto: 'Rechazar', clase: 'btn-peligro', accion: async () => {
           const m = await pedirMotivo(); if (!m) return false;

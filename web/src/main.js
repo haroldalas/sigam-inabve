@@ -11,18 +11,18 @@ import { sb, estado, cargarPerfil, cargarCatalogosBase, iniciarSesionMicrosoft, 
 const RUTAS = {
   inicio:       { t: 'Notificaciones',       i: '🔔', roles: ['administrador', 'dependiente'], v: () => import('./vistas/notificaciones.js') },
   novedades:    { t: 'Medicamentos nuevos',  i: '🆕', roles: ['consulta'], v: () => import('./vistas/novedades.js') },
-  existencias:  { t: 'Existencias',          i: '📦', roles: ['administrador', 'dependiente', 'consulta'], v: () => import('./vistas/existencias.js') },
+  existencias:  { t: 'Existencias',          i: '📦', roles: ['administrador', 'dependiente', 'consulta', 'jefatura'], v: () => import('./vistas/existencias.js') },
   despacho:     { t: 'Despacho',             i: '🧾', roles: ['administrador', 'dependiente'], v: () => import('./vistas/despacho.js') },
   recepcion:    { t: 'Recibir traslados',    i: '📥', roles: ['administrador', 'dependiente'], v: () => import('./vistas/recepcion.js') },
   traslados:    { t: 'Traslados',            i: '🚚', roles: ['administrador', 'dependiente'], v: () => import('./vistas/traslados.js') },
-  entradas:     { t: 'Entradas (facturas)',  i: '📑', roles: ['administrador', 'dependiente'], central: true, v: () => import('./vistas/entradas.js') },
+  entradas:     { t: 'Entradas (facturas)',  i: '📑', roles: ['administrador'], v: () => import('./vistas/entradas.js') },
   conteo:       { t: 'Conteo físico',        i: '🔢', roles: ['administrador', 'dependiente'], v: () => import('./vistas/conteo.js') },
   ajustes:      { t: 'Ajustes',              i: '⚖️', roles: ['administrador', 'dependiente'], v: () => import('./vistas/ajustes.js') },
   devoluciones: { t: 'Devoluciones',         i: '↩️', roles: ['administrador', 'dependiente'], v: () => import('./vistas/devoluciones.js') },
-  kardex:       { t: 'Kardex',               i: '📒', roles: ['administrador', 'dependiente'], v: () => import('./vistas/kardex.js') },
+  kardex:       { t: 'Kardex',               i: '📒', roles: ['administrador', 'dependiente', 'jefatura'], v: () => import('./vistas/kardex.js') },
   pendientes:   { t: 'Bandeja de revisión',  i: '✅', roles: ['administrador'], v: () => import('./vistas/pendientes.js') },
   lotes:        { t: 'Bloqueo de lotes',     i: '⛔', roles: ['administrador'], v: () => import('./vistas/lotes.js') },
-  tablero:      { t: 'Tablero de consumo',   i: '📊', roles: ['administrador'], v: () => import('./vistas/tablero.js') },
+  tablero:      { t: 'Tableros',   i: '📊', roles: ['administrador', 'jefatura'], v: () => import('./vistas/tablero.js') },
   polizas:      { t: 'Pólizas CEFAFA',       i: '🧮', roles: ['administrador'], v: () => import('./vistas/polizas.js') },
   conciliacion: { t: 'Conciliar con SIVET',  i: '🔁', roles: ['administrador'], v: () => import('./vistas/conciliacion.js') },
   liquidacion:  { t: 'Liquidación',          i: '💵', roles: ['administrador'], v: () => import('./vistas/liquidacion.js') },
@@ -37,7 +37,7 @@ const GRUPOS = [
 
 const app = $('#app');
 
-const rutaInicial = () => ['inicio', 'novedades', 'existencias'].find(rutaPermitida) || 'existencias';
+const rutaInicial = () => ['inicio', 'novedades', 'tablero', 'existencias'].find(rutaPermitida) || 'existencias';
 
 function rutaPermitida(clave) {
   const r = RUTAS[clave];
@@ -195,7 +195,7 @@ async function pantallaPendiente() {
     const tel = h('input', { class: 'campo', value: p.telefono || '', inputmode: 'tel', placeholder: 'Opcional' });
     const sede = h('select', { class: 'campo' }, h('option', { value: '' }, '— Elija su sede —'),
       sedes.map(s => h('option', { value: s.id, selected: s.id === (p.sede_solicitada || p.sede_id) }, s.nombre)));
-    const TIPOS = [['dependiente', 'Dependiente: despacho, traslados y bodega de mi sede'], ['consulta', 'Consulta: ver existencias y dónde están (médicos, Contact Center)'], ['administrador', 'Administrador (coordinación)']];
+    const TIPOS = [['dependiente', 'Dependiente: despacho, traslados y bodega de mi sede'], ['consulta', 'Consulta: ver existencias y dónde están (médicos, Contact Center)'], ['jefatura', 'Jefatura: existencias, kardex y tableros de consumo de todas las sedes'], ['administrador', 'Administrador (coordinación)']];
     const rol = h('select', { class: 'campo' }, TIPOS.map(([v, t]) => h('option', { value: v, selected: v === (p.rol_solicitado || p.rol_sugerido || 'dependiente') }, t)));
     const com = h('textarea', { class: 'campo', rows: 2, placeholder: 'Comentario para el administrador (opcional)' }, p.comentario || '');
     const btn = h('button', { class: 'btn btn-primario btn-grande', onclick: async () => {
@@ -224,7 +224,7 @@ let contenido, insigniaNotif, insigniaCola, insigniaPend, insigniaRecep;
 
 function armarEstructura() {
   const p = estado.perfil;
-  const rolTxt = { administrador: 'Administrador', dependiente: 'Dependiente', consulta: 'Consulta' }[p.rol];
+  const rolTxt = { administrador: 'Administrador', dependiente: 'Dependiente', consulta: 'Consulta', jefatura: 'Jefatura' }[p.rol];
   insigniaCola = h('button', { class: 'cola oculto', title: 'Despachos guardados sin conexión', onclick: () => { location.hash = '#despacho'; } });
   const menu = h('nav', { class: 'menu', 'aria-label': 'Menú principal' },
     GRUPOS.map(([g, claves]) => {
@@ -278,6 +278,7 @@ async function navegar() {
 
 export async function refrescarInsignias() {
   try {
+    if (estado.perfil?.rol === 'jefatura') return;
     if (estado.perfil?.rol === 'consulta') {   // consulta: medicamentos nuevos de la última semana
       const nov = await rpc('novedades_medicamentos', { p_dias: 7 });
       return marcar(insigniaNotif, nov.length);

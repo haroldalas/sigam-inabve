@@ -303,3 +303,12 @@ input.campo-num { text-align: right; max-width: 120px; }
 .login-solicitud { max-width: 480px; text-align: left; }
 .login-solicitud h1, .login-solicitud .login-logo { display: block; text-align: center; margin-left: auto; margin-right: auto; }
 .login-solicitud .btn-grande { width: 100%; margin-top: 8px; }
+
+/* tableros */
+.rejilla-graficos { grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); margin-top: 14px; }
+.rejilla-graficos > .tarjeta, .rejilla-graficos > section { margin: 0; }
+.grafico svg { display: block; max-height: 300px; }
+.dona { display: flex; align-items: center; gap: 18px; flex-wrap: wrap; }
+.dona .grafico { width: 180px; flex: 0 0 180px; }
+.leyenda-col { flex-direction: column; align-items: flex-start; gap: 6px; }
+@media (max-width: 560px) { .rejilla-graficos { grid-template-columns: 1fr; } }

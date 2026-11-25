@@ -3,7 +3,8 @@ from playwright.sync_api import sync_playwright
 USERS = {'admin': ('00000000-0000-0000-0000-000000000001', 'harold.alas@inabve.gob.sv'),
          'dep': ('00000000-0000-0000-0000-000000000002', 'iris.ramirez@inabve.gob.sv'),
          'cons': ('00000000-0000-0000-0000-000000000003', 'jose.avila@inabve.gob.sv'),
-         'nuevo': ('00000000-0000-0000-0000-000000000004', 'nuevo.usuario@inabve.gob.sv')}
+         'nuevo': ('00000000-0000-0000-0000-000000000004', 'nuevo.usuario@inabve.gob.sv'),
+         'jefe': ('00000000-0000-0000-0000-000000000005', 'jefa.prueba@inabve.gob.sv')}
 def token(sub):
     b = lambda d: base64.urlsafe_b64encode(json.dumps(d).encode()).decode().rstrip('=')
     return f"{b({'alg':'none'})}.{b({'sub': sub, 'exp': int(time.time())+36000, 'role':'authenticated'})}.x"

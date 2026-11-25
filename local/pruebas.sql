@@ -108,3 +108,6 @@ select numero_sivet, proveedor, unidades_compradas, unidades_entregadas, porcent
 select m.tipo, m.cantidad, m.saldo_lote, b.codigo, m.usuario from movimientos m join lotes l on l.id=m.lote_id join bodegas b on b.id=m.bodega_id
  where l.numero_lote='AMX-001' order by m.id;
 reset role;
+-- jefatura de prueba
+insert into auth.users(id,email,raw_app_meta_data) values ('00000000-0000-0000-0000-000000000005','jefa.prueba@inabve.gob.sv','{"provider":"azure"}') on conflict (id) do nothing;
+update perfiles set rol = 'jefatura', activo = true, estado_solicitud = 'aprobada' where email = 'jefa.prueba@inabve.gob.sv';
