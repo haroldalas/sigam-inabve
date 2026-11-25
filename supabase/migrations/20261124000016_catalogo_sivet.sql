@@ -20,3 +20,7 @@ on conflict (codigo) do nothing;
 -- Nombres de contrato como aparecen en SIVET
 update contratos set nombre_sivet = 'ACES - INSUMOS - JUAN PABLO II' where id = 17 and nombre_sivet = 'ASCES - INSUMOS - JUAN PABLO II';
 update contratos set nombre_sivet = replace(nombre_sivet, 'DADA DADA Y CÍA', 'DADA DADA Y C.A.') where nombre_sivet like 'DADA DADA Y CÍA%';
+insert into contratos (id, numero_sivet, proveedor_id, sede_id, tipo, nombre_sivet)
+select 45, 45, 13, 1, 'insumo', 'PISA - INSUMOS - JUAN PABLO II'
+ where not exists (select 1 from contratos where nombre_sivet = 'PISA - INSUMOS - JUAN PABLO II');
+select id, numero_sivet, nombre_sivet from contratos where id = 45;
