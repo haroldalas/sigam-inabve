@@ -226,7 +226,7 @@ async function pantallaPendiente() {
 }
 
 // ----------------------------------------------------------------------------- estructura
-let contenido, insigniaNotif, insigniaCola, insigniaPend, insigniaRecep;
+let contenido, insigniaNotif, insigniaCola, insigniaPend, insigniaRecep, insigniaAdmin, solicitudesVistas = -1;
 
 function armarEstructura() {
   const p = estado.perfil;
@@ -241,6 +241,7 @@ function armarEstructura() {
           h('span', { class: 'menu-icono', 'aria-hidden': 'true' }, RUTAS[k].i), h('span', {}, RUTAS[k].t),
           k === 'inicio' || k === 'novedades' ? (insigniaNotif = h('span', { class: 'insignia oculto' })) : null,
           k === 'pendientes' ? (insigniaPend = h('span', { class: 'insignia oculto' })) : null,
+          k === 'admin' ? (insigniaAdmin = h('span', { class: 'insignia oculto', title: 'Solicitudes de acceso por revisar' })) : null,
           k === 'recepcion' ? (insigniaRecep = h('span', { class: 'insignia oculto' })) : null)));
     }));
   contenido = h('main', { class: 'contenido', id: 'contenido', tabindex: '-1' });
@@ -289,11 +290,19 @@ export async function refrescarInsignias() {
       const nov = await rpc('novedades_medicamentos', { p_dias: 7 });
       return marcar(insigniaNotif, nov.length);
     }
-    const [res, pend, recep] = await Promise.all([
+    const [res, pend, recep, solic] = await Promise.all([
       q(sb.from('v_notif_resumen').select('*')),
       esAdmin() ? q(sb.from('v_pendientes_admin').select('id', { count: 'exact', head: true })) : null,
       q(sb.from('traslados').select('id,bodega_destino_id', { count: 'exact' }).eq('estado', 'enviado')),
+      esAdmin() ? sb.from('perfiles').select('email', { count: 'exact', head: true }).eq('estado_solicitud', 'pendiente') : null,
     ]);
+    if (solic) {
+      const n = solic.count || 0;
+      marcar(insigniaAdmin, n);
+      if (n > solicitudesVistas && solicitudesVistas >= 0)
+        toast(`${n - solicitudesVistas} solicitud(es) de acceso nueva(s) · Administración → Usuarios`, 'info', 10000);
+      solicitudesVistas = n;
+    }
     const filas = esDependiente() ? res.filter(r => r.sede_id === estado.perfil.sede_id) : res;
     const n = filas.reduce((s, r) => s + Number(r.vencidos) + Number(r.vencen_90_dias) + Number(r.agotados) + Number(r.cobertura_critica), 0);
     marcar(insigniaNotif, n);
@@ -320,7 +329,7 @@ async function iniciar() {
     productos().catch(() => {});        // precarga el catálogo para buscar sin conexión
     window.addEventListener('hashchange', navegar);
     await navegar();
-    refrescarInsignias(); setInterval(refrescarInsignias, 5 * 60_000);
+    refrescarInsignias(); setInterval(refrescarInsignias, (esAdmin() ? 2 : 5) * 60_000);
     sb.from('perfiles').update({ ultimo_acceso: new Date().toISOString() }).eq('id', perfil.id).then(() => {});
   } catch (e) {
     pantallaLogin(e.message);

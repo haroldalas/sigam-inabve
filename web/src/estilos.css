@@ -315,3 +315,13 @@ input.campo-num { text-align: right; max-width: 120px; }
 
 .aviso-version { position: fixed; left: 50%; bottom: 18px; transform: translateX(-50%); z-index: 9999; display: flex; gap: 12px; align-items: center;
   background: var(--azul); color: #fff; padding: 10px 14px; border-radius: 10px; box-shadow: 0 10px 30px rgba(0,0,0,.3); font-size: .9rem; }
+
+/* existencia por sede al armar un traslado */
+.mini-sedes { border-collapse: collapse; margin: 8px 0 4px; font-size: .82rem; min-width: 420px; }
+.mini-sedes th, .mini-sedes td { padding: 4px 10px; border-bottom: 1px solid var(--borde); text-align: left; }
+.mini-sedes th { color: var(--suave); font-weight: 600; font-size: .75rem; text-transform: uppercase; }
+.mini-sedes td.num { text-align: right; white-space: nowrap; }
+.mini-sedes tr.destino td { background: #fff6e0; font-weight: 600; }
+.mini-sedes tr.origen td { background: var(--azul-claro); }
+.mini-sedes tr.agotado td:nth-child(2) { color: var(--danger); font-weight: 600; }
+.mini-sedes tfoot td { font-weight: 700; border-bottom: 0; }

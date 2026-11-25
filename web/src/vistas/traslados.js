@@ -18,6 +18,30 @@ export default async function (params) {
   return raiz;
 }
 
+// Existencia actual por sede (sin Descarte) para decidir cuánto enviar y cuánto reservar
+function porSede(otras, origenId, destinoId) {
+  const bod = id => estado.bodegas.find(b => b.id === id);
+  const sedeDe = id => bod(id)?.sede_id;
+  const filas = estado.sedes.map(s => {
+    const xs = otras.filter(o => sedeDe(o.bodega_id) === s.id && bod(o.bodega_id)?.tipo !== 'descarte');
+    const sum = k => xs.reduce((a, o) => a + Number(o[k] || 0), 0);
+    const central = xs.filter(o => bod(o.bodega_id)?.tipo === 'central').reduce((a, o) => a + Number(o.disponible || 0), 0);
+    const disp = sum('disponible'), cons = sum('consumo_30d');
+    return { sede: s.nombre, id: s.id, disp, central, transito: sum('en_transito'), cons, dias: cons > 0 ? Math.floor((disp - central) / (cons / 30)) : null };
+  });
+  const tot = filas.reduce((a, f) => a + f.disp, 0);
+  const marca = f => { const o = f.id === sedeDe(origenId), d = f.id === sedeDe(destinoId); return o && d ? ' (origen y destino)' : o ? ' (origen)' : d ? ' (destino)' : ''; };
+  return h('table', { class: 'mini-sedes' },
+    h('thead', {}, h('tr', {}, ['Sede', 'Disponible', 'En tránsito', 'Consumo 30 d', 'Alcanza'].map(t => h('th', {}, t)))),
+    h('tbody', {}, filas.map(f => h('tr', { class: (f.id === sedeDe(destinoId) ? 'destino' : f.id === sedeDe(origenId) ? 'origen' : '') + (f.disp <= 0 ? ' agotado' : '') },
+      h('td', {}, f.sede + marca(f)),
+      h('td', { class: 'num' }, num(f.disp), f.central ? h('small', {}, ` (central ${num(f.central)})`) : null),
+      h('td', { class: 'num' }, f.transito ? num(f.transito) : '—'),
+      h('td', { class: 'num' }, f.cons ? num(f.cons) : '—'),
+      h('td', { class: 'num' }, f.dias === null ? '—' : f.dias < 15 ? h('strong', { style: { color: 'var(--danger)' } }, `${num(f.dias)} días`) : `${num(f.dias)} días`)))),
+    h('tfoot', {}, h('tr', {}, h('td', {}, 'Total'), h('td', { class: 'num' }, num(tot)), h('td', { colspan: 3 }))));
+}
+
 // ----------------------------------------------------------------------------- nuevo traslado
 async function nuevo(alTerminar) {
   const origenes = bodegasOperables().filter(b => b.tipo !== 'descarte' || esAdmin());
@@ -60,7 +84,8 @@ async function nuevo(alTerminar) {
           vence6m ? h('small', { style: { display: 'block', color: 'var(--warn)' } }, `⚠ El primer lote vence el ${fecha(l.lotes[0].fecha_vencimiento)} (6 meses o menos)`) : null,
           l.bloqueados?.length ? h('small', { style: { display: 'block', color: 'var(--danger)' } }, `${l.bloqueados.length} lote(s) bloqueado(s) o en cuarentena no se trasladan`) : null,
           l.p.cadena_frio ? h('small', { style: { display: 'block', color: '#0b5c86' } }, '❄ Requiere cadena de frío durante el envío') : null,
-          l.otras.length ? h('details', {}, h('summary', { class: 'nota' }, 'Existencia en todas las sedes'),
+          l.otras.length ? porSede(l.otras, st.origen, st.destino) : null,
+          l.otras.length ? h('details', {}, h('summary', { class: 'nota' }, 'Detalle por bodega'),
             tabla([{ t: 'Sede', k: 'sede' }, { t: 'Bodega', k: 'bodega' }, { t: 'Disponible', k: 'disponible', num: true },
               { t: 'En tránsito', k: 'en_transito', num: true }, { t: 'Consumo 30 d', k: 'consumo_30d', num: true }, { t: 'Alcanza (días)', k: 'dias_cobertura', num: true }], l.otras)) : null),
         h('div', { class: 'fila-campo' }, h('span', {}, 'Lote'), selLote),
