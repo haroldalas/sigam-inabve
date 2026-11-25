@@ -106,10 +106,14 @@ async function rest(req, res, ruta, url, cuerpo) {
   if (ruta.startsWith('/rest/v1/rpc/')) {
     const nombre = ruta.split('/').pop();
     const args = cuerpo ? JSON.parse(cuerpo) : {};
-    const { rows: [def] } = await pool.query(`select array_to_json(proargnames) n, array_to_json(array(select format_type(t, null) from unnest(proargtypes) t)) t
+    const { rows: [def] } = await pool.query(`select array_to_json(proargnames) n, array_to_json(array(select format_type(t, null) from unnest(proargtypes) t)) t, proretset
       from pg_proc where proname=$1 and pronamespace='public'::regnamespace limit 1`, [nombre]);
     const params = [], lista = [];
     (def?.n || []).forEach((a, i) => { if (a in args) { params.push(typeof args[a] === 'object' && args[a] !== null && !Array.isArray(args[a]) || def.t[i] === 'jsonb' ? JSON.stringify(args[a]) : args[a]); lista.push(`${id(a)} => $${params.length}::${def.t[i]}`); } });
+    if (def?.proretset) {   // funciones que devuelven tabla: arreglo de filas, como PostgREST
+      const r = await comoUsuario(token, c => c.query(`select * from public.${id(nombre)}(${lista.join(', ')})`, params));
+      return json(res, 200, r.rows);
+    }
     const r = await comoUsuario(token, c => c.query(`select public.${id(nombre)}(${lista.join(', ')}) as r`, params));
     return json(res, 200, r.rows[0].r ?? null);
   }

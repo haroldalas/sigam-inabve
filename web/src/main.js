@@ -9,7 +9,8 @@ import { sb, estado, cargarPerfil, cargarCatalogosBase, iniciarSesionMicrosoft, 
   nombreSede, pendientes, alCambiarCola, sincronizar, q, rpc, productos } from './api.js';
 
 const RUTAS = {
-  inicio:       { t: 'Notificaciones',       i: '🔔', roles: ['administrador', 'dependiente', 'consulta'], v: () => import('./vistas/notificaciones.js') },
+  inicio:       { t: 'Notificaciones',       i: '🔔', roles: ['administrador', 'dependiente'], v: () => import('./vistas/notificaciones.js') },
+  novedades:    { t: 'Medicamentos nuevos',  i: '🆕', roles: ['consulta'], v: () => import('./vistas/novedades.js') },
   existencias:  { t: 'Existencias',          i: '📦', roles: ['administrador', 'dependiente', 'consulta'], v: () => import('./vistas/existencias.js') },
   despacho:     { t: 'Despacho',             i: '🧾', roles: ['administrador', 'dependiente'], v: () => import('./vistas/despacho.js') },
   recepcion:    { t: 'Recibir traslados',    i: '📥', roles: ['administrador', 'dependiente'], v: () => import('./vistas/recepcion.js') },
@@ -28,13 +29,15 @@ const RUTAS = {
   admin:        { t: 'Administración',       i: '⚙️', roles: ['administrador'], v: () => import('./vistas/admin.js') },
 };
 const GRUPOS = [
-  ['General', ['inicio', 'existencias']],
+  ['General', ['inicio', 'novedades', 'existencias']],
   ['Operación', ['despacho', 'recepcion', 'traslados', 'entradas']],
   ['Inventario', ['conteo', 'ajustes', 'devoluciones', 'kardex']],
   ['Coordinación', ['pendientes', 'lotes', 'tablero', 'polizas', 'conciliacion', 'liquidacion', 'admin']],
 ];
 
 const app = $('#app');
+
+const rutaInicial = () => ['inicio', 'novedades', 'existencias'].find(rutaPermitida) || 'existencias';
 
 function rutaPermitida(clave) {
   const r = RUTAS[clave];
@@ -230,7 +233,7 @@ function armarEstructura() {
       return h('div', { class: 'menu-grupo' }, h('div', { class: 'menu-titulo' }, g),
         items.map(k => h('a', { href: '#' + k, class: 'menu-item', 'data-ruta': k },
           h('span', { class: 'menu-icono', 'aria-hidden': 'true' }, RUTAS[k].i), h('span', {}, RUTAS[k].t),
-          k === 'inicio' ? (insigniaNotif = h('span', { class: 'insignia oculto' })) : null,
+          k === 'inicio' || k === 'novedades' ? (insigniaNotif = h('span', { class: 'insignia oculto' })) : null,
           k === 'pendientes' ? (insigniaPend = h('span', { class: 'insignia oculto' })) : null,
           k === 'recepcion' ? (insigniaRecep = h('span', { class: 'insignia oculto' })) : null)));
     }));
@@ -239,7 +242,7 @@ function armarEstructura() {
   app.replaceChildren(
     h('header', { class: 'cabecera' },
       botonMenu,
-      h('a', { href: '#inicio', class: 'marca' },
+      h('a', { href: '#', class: 'marca' },
         h('img', { src: '/img/inabve-blanco.png', alt: 'INABVE', class: 'marca-logo' }),
         h('div', { class: 'marca-texto' }, h('strong', {}, 'SIGAM-INABVE'), h('small', {}, 'Gestión de Abastecimiento Médico'))),
       h('div', { class: 'cabecera-der' },
@@ -255,10 +258,10 @@ function armarEstructura() {
 }
 
 async function navegar() {
-  const clave = (location.hash.slice(1).split('?')[0]) || 'inicio';
+  const clave = (location.hash.slice(1).split('?')[0]) || rutaInicial();
   document.body.classList.remove('menu-abierto');
   document.querySelectorAll('.menu-item').forEach(a => a.classList.toggle('activo', a.dataset.ruta === clave));
-  if (!rutaPermitida(clave)) { location.hash = '#inicio'; return; }
+  if (!rutaPermitida(clave)) { location.hash = '#' + rutaInicial(); return; }
   const r = RUTAS[clave];
   document.title = `${r.t} · SIGAM-INABVE`;
   contenido.replaceChildren(cargando());
@@ -275,6 +278,10 @@ async function navegar() {
 
 export async function refrescarInsignias() {
   try {
+    if (estado.perfil?.rol === 'consulta') {   // consulta: medicamentos nuevos de la última semana
+      const nov = await rpc('novedades_medicamentos', { p_dias: 7 });
+      return marcar(insigniaNotif, nov.length);
+    }
     const [res, pend, recep] = await Promise.all([
       q(sb.from('v_notif_resumen').select('*')),
       esAdmin() ? q(sb.from('v_pendientes_admin').select('id', { count: 'exact', head: true })) : null,
