@@ -12,7 +12,7 @@ export default async function () {
   const filtrar = () => {
     const t = quitarTildes(f.texto.toLowerCase()).split(/\s+/).filter(Boolean);
     return lotes.filter(l =>
-      (!f.sede || String(l.sede_id) === f.sede) && (!f.tipoBodega || l.tipo_bodega === f.tipoBodega) &&
+      (!f.sede || String(l.sede_id) === f.sede) && (f.tipoBodega ? l.tipo_bodega === f.tipoBodega : l.tipo_bodega !== 'descarte') &&
       (!f.tipo || l.tipo === f.tipo) && (!f.familia || l.familia === f.familia) && (!f.proveedor || l.proveedor === f.proveedor) &&
       (!f.venc || (f.venc === '180' ? l.dias_para_vencer !== null && l.dias_para_vencer <= 180 : l.dias_para_vencer !== null && l.dias_para_vencer < 0)) &&
       (!t.length || t.every(x => quitarTildes(`${l.codigo || ''} ${l.nombre_comercial} ${l.principio_activo || ''}`.toLowerCase()).includes(x))));
@@ -69,7 +69,7 @@ export default async function () {
       h('div', { class: 'filtros' },
         h('label', { class: 'fila-campo', style: { flex: '2 1 300px' } }, h('span', {}, 'Buscar producto'), inp),
         h('label', { class: 'fila-campo' }, h('span', {}, 'Sede'), sel('sede', [['', 'Todas'], ...estado.sedes.map(s => [s.id, s.nombre])])),
-        h('label', { class: 'fila-campo' }, h('span', {}, 'Bodega'), sel('tipoBodega', [['', 'Todas'], ...Object.entries(TIPO_BODEGA).filter(([k]) => k !== 'descarte' || estado.perfil.rol === 'administrador')])),
+        h('label', { class: 'fila-campo' }, h('span', {}, 'Bodega'), sel('tipoBodega', [['', 'Todas (sin Descarte)'], ...Object.entries(TIPO_BODEGA).filter(([k]) => k !== 'descarte' || estado.perfil.rol === 'administrador')])),
         h('label', { class: 'fila-campo' }, h('span', {}, 'Tipo'), sel('tipo', [['', 'Todos'], ['medicamento', 'Medicamentos'], ['insumo', 'Insumos médicos']])),
         h('label', { class: 'fila-campo' }, h('span', {}, 'Familia'), sel('familia', [['', 'Todas'], ...familias.map(x => [x, x])])),
         h('label', { class: 'fila-campo' }, h('span', {}, 'Proveedor'), sel('proveedor', [['', 'Todos'], ...proveedores.map(x => [x, x])])),
