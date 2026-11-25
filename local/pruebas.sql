@@ -6,6 +6,9 @@ insert into auth.users(id,email) values
  ('00000000-0000-0000-0000-000000000002','iris.ramirez@inabve.gob.sv'),
  ('00000000-0000-0000-0000-000000000003','jose.avila@inabve.gob.sv'),
  ('00000000-0000-0000-0000-000000000004','nuevo.usuario@inabve.gob.sv');
+-- usuarios de prueba aprobados (en producción solo Oscar Rivas y Harold Alas vienen habilitados)
+update perfiles set activo = true, estado_solicitud = 'aprobada', rol = 'dependiente', sede_id = 3 where email = 'iris.ramirez@inabve.gob.sv';
+update perfiles set activo = true, estado_solicitud = 'aprobada', rol = 'consulta' where email = 'jose.avila@inabve.gob.sv';
 \echo '--- T1 cuenta no institucional (debe fallar)'
 insert into auth.users(email) values ('alguien@gmail.com');
 select email, rol, sede_id, activo, id is not null as enlazado from perfiles

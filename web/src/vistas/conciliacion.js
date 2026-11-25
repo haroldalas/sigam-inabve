@@ -21,16 +21,21 @@ export function detectarContrato(nombreArchivo, contratos) {
 }
 
 const COLS = { codigo: ['CODIGO'], producto: ['PRODUCTO'], factura: ['NUM FACTURA', 'NUMERO FACTURA', 'NO FACTURA', 'FACTURA'],
-  stock: ['STOCK', 'EXISTENCIA', 'DISPONIBLE ACTUAL'], precio: ['PRECIO'], fecha: ['FECHA FACTURA'] };
+  stock: ['STOCK', 'EXISTENCIA', 'DISPONIBLE ACTUAL'], precio: ['PRECIO'], fecha: ['FECHA FACTURA'],
+  cantidad: ['CANTIDAD'], gastada: ['CANTIDAD GASTADA'] };
 
 export function aFilasSivet(filas) {
   if (!filas.length) throw new Error('El archivo no tiene filas');
   const cab = Object.keys(filas[0]);
   const m = Object.fromEntries(Object.entries(COLS).map(([k, alias]) => [k, cab.find(c => alias.includes(norm(c)))]));
-  if (!m.stock || (!m.codigo && !m.producto)) throw new Error('No parece un Excel de contrato de SIVET: faltan las columnas "Codigo", "Producto" o "Stock"');
+  // Los contratos de insumos no traen "Stock": la existencia es Cantidad − Cantidad Gastada
+  const sinStock = !m.stock && m.cantidad && m.gastada;
+  if ((!m.stock && !sinStock) || (!m.codigo && !m.producto)) throw new Error('No parece un Excel de contrato de SIVET: faltan las columnas "Codigo", "Producto" y "Stock" (o "Cantidad" y "Cantidad Gastada")');
   const txt = v => v instanceof Date ? v.toISOString().slice(0, 10) : v === null || v === undefined ? null : String(v).trim();
+  const n = v => Number(String(v ?? '0').replace(/,/g, '')) || 0;
   return filas.map(r => ({ codigo: txt(r[m.codigo]), producto: txt(r[m.producto]), factura: m.factura ? txt(r[m.factura]) : null,
-    stock: txt(r[m.stock]) ?? '0', precio: m.precio ? txt(r[m.precio]) : null, fecha: m.fecha ? txt(r[m.fecha]) : null }))
+    stock: sinStock ? String(Math.max(0, n(r[m.cantidad]) - n(r[m.gastada]))) : String(Math.max(0, n(r[m.stock]))),
+    negativo: (sinStock ? n(r[m.cantidad]) - n(r[m.gastada]) : n(r[m.stock])) < 0, precio: m.precio ? txt(r[m.precio]) : null, fecha: m.fecha ? txt(r[m.fecha]) : null }))
     .filter(r => r.codigo || r.producto);
 }
 
