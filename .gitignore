@@ -12,3 +12,4 @@ carga_supabase/*.sql
 .netlify
 __pycache__/
 web/public/ocr/
+pruebas/shots/
