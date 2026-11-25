@@ -290,3 +290,6 @@ input.campo-num { text-align: right; max-width: 120px; }
   .fila > .fila-campo[style] { flex: 1 1 100% !important; }
 }
 .btn-enlace { background: none; border: 0; padding: 0; color: var(--azul); text-decoration: underline; cursor: pointer; font: inherit; text-align: left; }
+.login-solicitud { max-width: 480px; text-align: left; }
+.login-solicitud h1, .login-solicitud .login-logo { display: block; text-align: center; margin-left: auto; margin-right: auto; }
+.login-solicitud .btn-grande { width: 100%; margin-top: 8px; }

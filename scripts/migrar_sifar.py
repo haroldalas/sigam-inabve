@@ -323,11 +323,16 @@ for u in T["tblUsuarios"]:
     if not red or "." not in red: omit.append(red); continue
     bod = BOD_MAP.get(u["IDBodegaAsignada"], 1)
     rol = "administrador" if red in ADMINS else ("consulta" if u["IDRol"] in (4, 5) else "dependiente")
-    perf_rows.append((f"{red}@inabve.gob.sv", u["NombreCompleto"], rol, BOD_SEDE[bod] if rol != "consulta" else None,
-                      str(u["Estado"]).lower() == "activo", red))
+    # Solo los administradores quedan habilitados. El resto entra con su cuenta Microsoft, envía su
+    # solicitud y un administrador le asigna el rol; el rol de SIFAR queda como sugerencia.
+    adm = rol == "administrador"
+    perf_rows.append((f"{red}@inabve.gob.sv", u["NombreCompleto"], "administrador" if adm else "consulta",
+                      BOD_SEDE[bod] if rol != "consulta" else None,
+                      adm and str(u["Estado"]).lower() == "activo", red, rol,
+                      "aprobada" if adm else "sin_enviar"))
 nota(f"- {len(perf_rows)} usuarios precargados (correo = usuario de red @inabve.gob.sv): "
-     f"{sum(1 for r in perf_rows if r[2]=='administrador')} administradores, {sum(1 for r in perf_rows if r[2]=='dependiente')} "
-     f"dependientes y {sum(1 for r in perf_rows if r[2]=='consulta')} de consulta. Omitidos por usuario incompleto: {omit}.")
+     f"{sum(1 for r in perf_rows if r[6]=='administrador')} administradores habilitados; el resto queda sin acceso hasta que envíe su solicitud "
+     f"(rol sugerido según SIFAR: {sum(1 for r in perf_rows if r[6]=='dependiente')} dependientes, {sum(1 for r in perf_rows if r[6]=='consulta')} de consulta). Omitidos por usuario incompleto: {omit}.")
 
 # --------------------------------------------------------------------------- escritura
 with open(os.path.join(OUT, "seed_01_catalogos.sql"), "w") as f:
@@ -343,7 +348,7 @@ with open(os.path.join(OUT, "seed_01_catalogos.sql"), "w") as f:
     f.write("alter table productos enable trigger productos_validar;\n")
     ins("proveedores", ["id", "nombre", "nombre_sivet", "es_cefafa", "es_carga_inicial", "activo"], PROVS, f)
     ins("contratos", ["id", "numero_sivet", "proveedor_id", "sede_id", "tipo", "nombre_sivet"], cont_rows, f)
-    ins("perfiles", ["email", "nombre", "rol", "sede_id", "activo", "sifar_usuario"], [r for r in perf_rows], f)
+    ins("perfiles", ["email", "nombre", "rol", "sede_id", "activo", "sifar_usuario", "rol_sugerido", "estado_solicitud"], [r for r in perf_rows], f)
     f.write(f"insert into correlativos values ('traslado', {max(r[0] for r in tr_rows)}) on conflict do nothing;\n")
 
 with open(os.path.join(OUT, "seed_02_facturas_lotes.sql"), "w") as f:

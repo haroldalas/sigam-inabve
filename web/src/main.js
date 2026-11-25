@@ -3,9 +3,9 @@ import '@fontsource/montserrat/400.css';
 import '@fontsource/montserrat/600.css';
 import '@fontsource/montserrat/700.css';
 import './estilos.css';
-import { h, $, toast, error, cargando } from './ui.js';
+import { h, $, toast, error, cargando, fechaHora } from './ui.js';
 import { sb, estado, cargarPerfil, cargarCatalogosBase, iniciarSesionMicrosoft, cerrarSesion, esAdmin, esDependiente,
-  nombreSede, pendientes, alCambiarCola, sincronizar, q, productos } from './api.js';
+  nombreSede, pendientes, alCambiarCola, sincronizar, q, rpc, productos } from './api.js';
 
 const RUTAS = {
   inicio:       { t: 'Notificaciones',       i: '🔔', roles: ['administrador', 'dependiente', 'consulta'], v: () => import('./vistas/notificaciones.js') },
@@ -61,12 +61,54 @@ function pantallaLogin(mensaje) {
     h('footer', { class: 'login-pie' }, 'Departamento de Programas de Salud Integral · INABVE')));
 }
 
-function pantallaPendiente() {
-  app.replaceChildren(h('main', { class: 'login' }, h('div', { class: 'login-caja' },
-    h('img', { src: '/img/inabve-color.png', alt: 'INABVE', class: 'login-logo' }),
-    h('h1', {}, 'Acceso pendiente'),
-    h('p', {}, `Su cuenta ${estado.perfil.email} quedó registrada. Un administrador debe asignarle un rol y una sede para que pueda usar el sistema.`),
-    h('button', { class: 'btn btn-sec', onclick: cerrarSesion }, 'Cerrar sesión'))));
+// Usuario sin acceso: envía su solicitud; un administrador le asigna rol y sede
+async function pantallaPendiente() {
+  const p = estado.perfil;
+  const caja = h('div', { class: 'login-caja login-solicitud' },
+    h('img', { src: '/img/inabve-color.png', alt: 'INABVE', class: 'login-logo' }), h('h1', {}, 'Solicitud de acceso'));
+  app.replaceChildren(h('main', { class: 'login' }, caja));
+  const pie = h('div', { class: 'botones', style: { justifyContent: 'center', marginTop: '10px' } },
+    h('button', { class: 'btn btn-sec', onclick: () => iniciar() }, '↻ Actualizar'),
+    h('button', { class: 'btn btn-sec', onclick: cerrarSesion }, 'Cerrar sesión'));
+  if (!p.email || !p.estado_solicitud) {           // sin perfil (sin conexión) o base sin la migración
+    caja.append(h('p', {}, `Su cuenta ${p.email || ''} aún no tiene acceso. Un administrador debe habilitarla.`), pie); return;
+  }
+  if (p.estado_solicitud === 'pendiente') {
+    caja.append(h('p', { class: 'aviso aviso-info' }, `Solicitud enviada el ${fechaHora(p.solicitado_at)}. Un administrador revisará su acceso y le asignará un rol.`),
+      h('p', { class: 'nota' }, `${p.nombre} · ${p.cargo || ''} · ${p.email}`),
+      h('button', { class: 'btn-enlace', onclick: () => formulario() }, 'Corregir mi solicitud'), pie);
+    return;
+  }
+  const formulario = async () => {
+    let sedes = [];
+    try { sedes = await q(sb.from('sedes').select('id,nombre').eq('activa', true).order('id')); } catch { /* sin sedes */ }
+    const nombre = h('input', { class: 'campo', value: p.nombre || '', autocomplete: 'name' });
+    const cargo = h('input', { class: 'campo', value: p.cargo || '', placeholder: 'Ej.: Dependiente de farmacia, Médico, Contact Center' });
+    const tel = h('input', { class: 'campo', value: p.telefono || '', inputmode: 'tel', placeholder: 'Opcional' });
+    const sede = h('select', { class: 'campo' }, h('option', { value: '' }, '— Elija su sede —'),
+      sedes.map(s => h('option', { value: s.id, selected: s.id === (p.sede_solicitada || p.sede_id) }, s.nombre)));
+    const TIPOS = [['dependiente', 'Dependiente: despacho, traslados y bodega de mi sede'], ['consulta', 'Consulta: ver existencias y dónde están (médicos, Contact Center)'], ['administrador', 'Administrador (coordinación)']];
+    const rol = h('select', { class: 'campo' }, TIPOS.map(([v, t]) => h('option', { value: v, selected: v === (p.rol_solicitado || p.rol_sugerido || 'dependiente') }, t)));
+    const com = h('textarea', { class: 'campo', rows: 2, placeholder: 'Comentario para el administrador (opcional)' }, p.comentario || '');
+    const btn = h('button', { class: 'btn btn-primario btn-grande', onclick: async () => {
+      btn.disabled = true;
+      try {
+        await rpc('enviar_solicitud_acceso', { p: { nombre: nombre.value, cargo: cargo.value, telefono: tel.value, sede_id: sede.value, rol: rol.value, comentario: com.value } });
+        toast('Solicitud enviada'); iniciar();
+      } catch (e) { error(e); btn.disabled = false; }
+    } }, 'Enviar solicitud');
+    caja.replaceChildren(caja.firstChild, h('h1', {}, 'Solicitud de acceso'),
+      p.estado_solicitud === 'rechazada' ? h('p', { class: 'aviso aviso-error' }, `Su solicitud anterior fue rechazada: ${p.motivo_rechazo || ''}`) : null,
+      h('p', { class: 'nota' }, `Cuenta: ${p.email}. Complete sus datos; un administrador definirá su rol y su sede.`),
+      h('label', { class: 'fila-campo' }, h('span', {}, 'Nombre completo'), nombre),
+      h('label', { class: 'fila-campo' }, h('span', {}, 'Cargo'), cargo),
+      h('label', { class: 'fila-campo' }, h('span', {}, 'Sede donde trabaja'), sede),
+      h('label', { class: 'fila-campo' }, h('span', {}, 'Acceso que necesita'), rol),
+      h('label', { class: 'fila-campo' }, h('span', {}, 'Teléfono o extensión'), tel),
+      h('label', { class: 'fila-campo' }, h('span', {}, 'Comentario'), com),
+      btn, pie);
+  };
+  formulario();
 }
 
 // ----------------------------------------------------------------------------- estructura

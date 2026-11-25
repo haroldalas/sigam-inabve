@@ -1,7 +1,7 @@
 // Conciliación de existencias con SIVET (solo administradores).
 // Se sube el Excel "DetallesContrato" de cada contrato; SIVET manda.
-// Bodega Central y Pequeña Cirugía conservan lo que tiene SIGAM; el resto de la
-// sede (despacho, almacén, campo) queda igual a SIVET.
+// Bodega Central, Pequeña Cirugía y Campo conservan lo que tiene SIGAM (se actualizan con SIFAR);
+// Despacho de Medicamentos y Almacén de Insumos de cada sede quedan iguales a SIVET.
 import { h, toast, error, num, fechaHora, tabla, select, confirmar, exportarExcel } from '../ui.js';
 import { sb, q, rpc, quitarTildes } from '../api.js';
 import { leerArchivo } from './liquidacion.js';
@@ -48,12 +48,27 @@ export default async function () {
 
 function cargar(contratos) {
   const lista = h('div');
+  const paneles = [];
+  const estadoLote = h('span', { class: 'nota' });
+  const todosPrevia = async () => {
+    for (const [i, p] of paneles.entries()) { if (p.listo || p.aplicado) continue; estadoLote.textContent = `Vista previa ${i + 1} de ${paneles.length}…`; await p.previa(); }
+    estadoLote.textContent = `${paneles.filter(p => p.listo).length} listos para aplicar · ${paneles.filter(p => p.aplicado).length} aplicados · ${paneles.filter(p => !p.listo && !p.aplicado).length} sin contrato o con error`;
+  };
+  const todosAplicar = async () => {
+    const listos = paneles.filter(p => p.listo && !p.aplicado);
+    if (!listos.length) return toast('Primero genere la vista previa de los archivos', 'error');
+    if (!await confirmar('Aplicar todos', `Se aplicará la conciliación de ${listos.length} contrato(s). Despacho y Almacén de cada sede quedarán iguales a SIVET; Central, Pequeña Cirugía y Campo no cambian. ¿Continuar?`, 'Aplicar todos')) return;
+    let ok = 0;
+    for (const [i, p] of listos.entries()) { estadoLote.textContent = `Aplicando ${i + 1} de ${listos.length}…`; if (await p.aplicar(false)) ok++; }
+    estadoLote.textContent = `✔ ${ok} de ${listos.length} contratos aplicados`;
+    toast(`${ok} contrato(s) conciliados con SIVET`, ok === listos.length ? 'ok' : 'info', 8000);
+  };
   const archivo = h('input', { type: 'file', accept: '.xlsx,.xls,.csv', multiple: true, class: 'campo' });
   archivo.onchange = async () => {
     for (const file of archivo.files) {
       const caja = h('section', { class: 'tarjeta' }, h('p', { class: 'nota' }, `Leyendo ${file.name}…`));
       lista.prepend(caja);
-      try { await panelArchivo(caja, file, contratos); }
+      try { paneles.push(await panelArchivo(caja, file, contratos)); }
       catch (e) { caja.replaceChildren(h('h3', {}, file.name), h('p', { class: 'aviso aviso-error' }, e.message || String(e))); }
     }
     archivo.value = '';
@@ -63,11 +78,14 @@ function cargar(contratos) {
       h('h2', {}, 'Conciliar existencias con SIVET'),
       h('p', {}, 'Descargue de SIVET el Excel de cada contrato (hoja "DetallesContrato") y súbalo aquí; puede seleccionar varios a la vez. SIVET manda:'),
       h('ul', {},
-        h('li', {}, 'Bodega Central y Pequeña Cirugía no cambian: conservan las existencias de SIGAM y se descuentan del stock de SIVET.'),
-        h('li', {}, 'Despacho de Medicamentos, Almacén de Insumos y Campo de la sede quedan con el resto, usando los lotes que ya existen (primero los de la misma factura).'),
+        h('li', {}, 'Bodega Central, Pequeña Cirugía y Campo no cambian (se actualizan con el archivo de SIFAR del cierre): su existencia se descuenta del stock de SIVET.'),
+        h('li', {}, 'Despacho de Medicamentos y Almacén de Insumos de la sede quedan con el resto, usando los lotes que ya existen (primero los de la misma factura).'),
         h('li', {}, 'Lo que falte se suma al lote de esa factura o se crea en el Despacho (medicamentos) o Almacén (insumos). Lo que SIVET ya no tiene queda en cero.'),
         h('li', {}, 'Primero verá una vista previa; nada cambia hasta que presione "Aplicar". Cada cambio queda en el kardex como "Conciliación SIVET".')),
-      h('label', { class: 'fila-campo' }, h('span', {}, 'Excel de contrato SIVET'), archivo)),
+      h('label', { class: 'fila-campo' }, h('span', {}, 'Excel de contrato SIVET'), archivo),
+      h('div', { class: 'botones', style: { marginTop: '10px' } },
+        h('button', { class: 'btn btn-sec', onclick: todosPrevia }, 'Vista previa de todos'),
+        h('button', { class: 'btn btn-primario', onclick: todosAplicar }, '✔ Aplicar todos los revisados'), estadoLote)),
     lista);
 }
 
@@ -75,42 +93,45 @@ async function panelArchivo(caja, file, contratos) {
   const filas = aFilasSivet(await leerArchivo(file));
   const sel = select([['', '— Elija el contrato —'], ...contratos.map(c => [c.id, c.nombre_sivet])], detectarContrato(file.name, contratos));
   const zona = h('div');
+  const ctl = { listo: false, aplicado: false };
   const btnPrev = h('button', { class: 'btn btn-primario', onclick: () => previa() }, 'Ver vista previa');
-  sel.onchange = () => zona.replaceChildren();
+  sel.onchange = () => { zona.replaceChildren(); ctl.listo = false; };
   caja.replaceChildren(
     h('h3', {}, file.name), h('p', { class: 'nota' }, `${filas.length} líneas de factura · stock total ${num(filas.reduce((s, r) => s + (Number(r.stock) || 0), 0))}`),
     h('div', { class: 'filtros' }, h('label', { class: 'fila-campo' }, h('span', {}, 'Contrato'), sel), btnPrev), zona);
 
   async function previa() {
-    if (!sel.value) return toast('Elija el contrato al que corresponde el archivo', 'error');
+    if (!sel.value) { zona.replaceChildren(h('p', { class: 'aviso aviso-warn' }, 'No se reconoció el contrato por el nombre del archivo: elíjalo arriba.')); return; }
     btnPrev.disabled = true; zona.replaceChildren(h('p', { class: 'nota' }, 'Calculando…'));
     try {
       const r = await rpc('conciliar_sivet', { p_contrato: Number(sel.value), p_filas: filas, p_aplicar: false });
-      mostrar(r);
-    } catch (e) { error(e); zona.replaceChildren(); } finally { btnPrev.disabled = false; }
+      mostrar(r); ctl.listo = true;
+    } catch (e) { error(e); zona.replaceChildren(); ctl.listo = false; } finally { btnPrev.disabled = false; }
   }
+  ctl.previa = previa;
+  ctl.aplicar = async preguntar => ctl.aplicarFn ? ctl.aplicarFn(preguntar) : false;
 
   function mostrar(r) {
     let soloCambios = true;
     const tablaZona = h('div');
     const cols = [
       { t: 'Código', k: 'codigo' }, { t: 'Producto', k: 'producto' },
-      { t: 'SIVET', k: 'sivet', num: true }, { t: 'Central + P. Cirugía', k: 'central_pc', num: true },
+      { t: 'SIVET', k: 'sivet', num: true }, { t: 'Central + P.C. + Campo', k: 'central_pc', num: true },
       { t: 'SIGAM antes', k: 'actual', num: true }, { t: 'Queda', k: 'final', num: true },
       { t: 'Diferencia', num: true, f: x => h('strong', { style: { color: Number(x.diferencia) > 0 ? 'var(--ok)' : Number(x.diferencia) < 0 ? 'var(--danger)' : '' } }, (Number(x.diferencia) > 0 ? '+' : '') + num(x.diferencia)),
         exportar: x => Number(x.diferencia), ord: x => Number(x.diferencia) },
-      { t: 'Nota', f: x => [Number(x.lotes_nuevos) ? 'lote nuevo' : '', Number(x.central_pc_excede) ? `Central/P.C. tiene ${num(x.central_pc_excede)} más que SIVET` : ''].filter(Boolean).join(' · '),
+      { t: 'Nota', f: x => [Number(x.lotes_nuevos) ? 'lote nuevo' : '', Number(x.central_pc_excede) ? `Central/P.C./Campo tiene ${num(x.central_pc_excede)} más que SIVET` : ''].filter(Boolean).join(' · '),
         exportar: x => [Number(x.lotes_nuevos) ? 'lote nuevo' : '', Number(x.central_pc_excede) ? `Central/P.C. excede ${x.central_pc_excede}` : ''].filter(Boolean).join(' · ') },
     ];
     const pintarTabla = () => tablaZona.replaceChildren(tabla(cols, soloCambios ? r.detalle.filter(x => Number(x.diferencia) !== 0 || Number(x.central_pc_excede)) : r.detalle, { vacio: 'Sin diferencias: SIGAM ya coincide con SIVET' }));
     const chk = h('input', { type: 'checkbox', checked: true, onchange: e => { soloCambios = e.target.checked; pintarTabla(); } });
     pintarTabla();
     const k = (t, v, color) => h('div', { class: 'kpi' }, h('div', { class: 'kpi-titulo' }, t), h('div', { class: 'kpi-valor', style: color ? { color } : null }, v));
-    const btnAplicar = h('button', { class: 'btn btn-primario', onclick: aplicar }, '✔ Aplicar conciliación');
+    const btnAplicar = h('button', { class: 'btn btn-primario', onclick: () => aplicar(true) }, '✔ Aplicar conciliación');
     zona.replaceChildren(
       h('div', { class: 'rejilla' },
-        k('Stock SIVET', num(r.sivet_total)), k('Se conserva en Central y P. Cirugía', num(r.conservado_total)),
-        k('Despacho/Almacén/Campo antes', num(r.actual_total)), k('Queda después', num(r.final_total)),
+        k('Stock SIVET', num(r.sivet_total)), k('Se conserva en Central, P. Cirugía y Campo', num(r.conservado_total)),
+        k('Despacho/Almacén antes', num(r.actual_total)), k('Queda después', num(r.final_total)),
         k('Aumenta', '+' + num(r.aumenta), 'var(--ok)'), k('Disminuye', '−' + num(r.disminuye), 'var(--danger)'),
         k('Productos que cambian', num(r.productos_cambian)), k('Lotes que se crean o reponen', num(r.lotes_nuevos))),
       r.no_encontrados?.length ? h('div', { class: 'aviso aviso-warn' },
@@ -118,7 +139,7 @@ async function panelArchivo(caja, file, contratos) {
         h('ul', {}, r.no_encontrados.slice(0, 15).map(x => h('li', {}, `Fila ${x.fila}: ${x.codigo || 'sin código'} · ${x.producto} · factura ${x.factura || '—'} · ${num(x.stock)} u.`))),
         h('small', {}, 'Agregue esos productos al catálogo (Administración) con el mismo código de SIVET y vuelva a subir el archivo.')) : null,
       Number(r.conservado_excede) > 0 ? h('div', { class: 'aviso aviso-info' },
-        `Bodega Central y Pequeña Cirugía tienen ${num(r.conservado_excede)} unidades más de lo que SIVET registra para este contrato. No se modifican; revise esos productos (columna Nota).`) : null,
+        `Bodega Central, Pequeña Cirugía y Campo tienen ${num(r.conservado_excede)} unidades más de lo que SIVET registra para este contrato. No se modifican; revise esos productos (columna Nota).`) : null,
       Number(r.carga_inicial_sin_usar) > 0 ? h('p', { class: 'nota' },
         `${num(r.carga_inicial_sin_usar)} unidades en lotes sin contrato (carga inicial de SIFAR) no se usaron y se dejan como están: pueden pertenecer a otro contrato.`) : null,
       h('div', { class: 'filtros', style: { marginTop: '10px' } },
@@ -128,19 +149,23 @@ async function panelArchivo(caja, file, contratos) {
         btnAplicar),
       tablaZona);
 
-    async function aplicar() {
-      if (!await confirmar('Aplicar conciliación',
-        `${r.contrato}: Despacho, Almacén y Campo de la sede quedarán con ${num(r.final_total)} unidades (antes ${num(r.actual_total)}). ` +
-        'Central y Pequeña Cirugía no cambian. Cada cambio quedará en el kardex. ¿Continuar?', 'Aplicar')) return;
+    ctl.aplicarFn = aplicar;
+    async function aplicar(preguntar = true) {
+      if (preguntar !== false && !await confirmar('Aplicar conciliación',
+        `${r.contrato}: Despacho y Almacén de la sede quedarán con ${num(r.final_total)} unidades (antes ${num(r.actual_total)}). ` +
+        'Central, Pequeña Cirugía y Campo no cambian. Cada cambio quedará en el kardex. ¿Continuar?', 'Aplicar')) return false;
       btnAplicar.disabled = true;
       try {
         const res = await rpc('conciliar_sivet', { p_contrato: Number(sel.value), p_filas: filas, p_aplicar: true, p_archivo: file.name });
-        toast(`Conciliación aplicada: +${num(res.aumenta)} / −${num(res.disminuye)}${res.lotes_sin_vencimiento ? ` · ${res.lotes_sin_vencimiento} lote(s) nuevos sin vencimiento: complételos en Administración` : ''}`, 'ok', 10000);
-        caja.replaceChildren(h('h3', {}, `✔ ${file.name}`), h('p', {}, `${res.contrato} conciliado. Antes ${num(res.actual_total)} · ahora ${num(res.final_total)} unidades en Despacho/Almacén/Campo.`),
+        ctl.aplicado = true; ctl.listo = false;
+        if (preguntar !== false) toast(`Conciliación aplicada: +${num(res.aumenta)} / −${num(res.disminuye)}${res.lotes_sin_vencimiento ? ` · ${res.lotes_sin_vencimiento} lote(s) nuevos sin vencimiento` : ''}`, 'ok', 10000);
+        caja.replaceChildren(h('h3', {}, `✔ ${file.name}`), h('p', {}, `${res.contrato} conciliado. Antes ${num(res.actual_total)} · ahora ${num(res.final_total)} unidades en Despacho/Almacén.`),
           res.lotes_sin_vencimiento ? h('p', { class: 'aviso aviso-warn' }, `${res.lotes_sin_vencimiento} lote(s) se crearon sin número de lote ni vencimiento (la factura no estaba en SIGAM). Aparecen como "SIVET-<factura>".`) : null);
-      } catch (e) { error(e); btnAplicar.disabled = false; }
+        return true;
+      } catch (e) { error(e); btnAplicar.disabled = false; return false; }
     }
   }
+  return ctl;
 }
 
 async function historial() {

@@ -6,13 +6,19 @@ import { refrescarInsignias } from '../main.js';
 export default async function () {
   const raiz = h('div');
   const pintar = async () => {
-    const [difs, devs, conteos] = await Promise.all([
+    const [difs, devs, conteos, sols] = await Promise.all([
       q(sb.from('traslado_diferencias').select('*,productos(codigo,nombre_comercial),traslados(numero,fecha,bodega_origen_id,bodega_destino_id,recibido_por),traslado_detalle(lote_origen_id,lote_destino_id)').eq('estado', 'pendiente').order('id')),
       q(sb.from('devoluciones').select('*,productos(codigo,nombre_comercial),lotes(numero_lote,fecha_vencimiento)').eq('estado', 'pendiente').order('id')),
       q(sb.from('conteos').select('*').eq('estado', 'pendiente_aprobacion').order('id')),
+      q(sb.from('perfiles').select('email,nombre,cargo,sede_solicitada,rol_solicitado,solicitado_at').eq('estado_solicitud', 'pendiente').order('solicitado_at')).catch(() => []),
     ]);
     const nom = id => estado.bodegas.find(b => b.id === id)?.nombre || '';
     raiz.replaceChildren(
+      sols.length ? h('section', { class: 'tarjeta' }, h('h2', {}, `Solicitudes de acceso (${sols.length})`),
+        tabla([{ t: 'Enviada', f: r => fechaHora(r.solicitado_at) }, { t: 'Nombre', k: 'nombre' }, { t: 'Correo', k: 'email' }, { t: 'Cargo', k: 'cargo' },
+          { t: 'Sede', f: r => estado.sedes.find(s => s.id === r.sede_solicitada)?.nombre || '' }, { t: 'Solicita', k: 'rol_solicitado' }],
+          sols, { alClic: () => { location.hash = '#admin'; } }),
+        h('p', { class: 'nota' }, 'Se aprueban en Administración → Usuarios, asignando rol y sede.')) : null,
       h('section', { class: 'tarjeta' }, h('h2', {}, `Diferencias en traslados (${difs.length})`),
         h('p', { class: 'nota' }, 'La sede ya aceptó lo que coincidía. Decida qué hacer con cada diferencia.'),
         tabla([

@@ -1,6 +1,7 @@
 // Administración: usuarios, catálogo, mínimos por sede, parámetros y bitácora de cambios
 import { h, toast, error, num, fecha, fechaHora, tabla, estadoChip, modal, select, confirmar, chipsProducto, exportarExcel, debounce } from '../ui.js';
-import { sb, q, todas, estado, productos, quitarTildes } from '../api.js';
+import { sb, q, rpc, todas, estado, productos, quitarTildes } from '../api.js';
+import { refrescarInsignias } from '../main.js';
 import { buscadorProducto } from '../componentes.js';
 
 export default async function (params) {
@@ -35,7 +36,7 @@ async function usuarios() {
       h('p', { class: 'nota' }, 'Dependiente: opera las bodegas de su sede. Consulta: ve existencias y dónde están (médicos, Contact Center). Administrador: todo.')), {
       acciones: [{ texto: 'Guardar', clase: 'btn-primario', accion: async () => {
         if (rol.value === 'dependiente' && !sede.value) { toast('Un dependiente debe tener sede', 'error'); return false; }
-        const datos = { nombre: nombre.value.trim(), rol: rol.value, sede_id: sede.value ? Number(sede.value) : null, activo: activo.checked };
+        const datos = { nombre: nombre.value.trim(), rol: rol.value, sede_id: sede.value ? Number(sede.value) : null, activo: activo.checked, ...(activo.checked ? { estado_solicitud: 'aprobada' } : {}) };
         if (nuevo) {
           const e = email.value.trim().toLowerCase();
           if (!/^[^@]+@inabve\.gob\.sv$/.test(e)) { toast('Debe ser un correo @inabve.gob.sv', 'error'); return false; }
@@ -51,15 +52,64 @@ async function usuarios() {
     const t = quitarTildes(buscar.value.toLowerCase());
     zona.replaceChildren(tabla([
       { t: 'Nombre', k: 'nombre' }, { t: 'Correo', k: 'email' }, { t: 'Rol', f: r => ROLES.find(x => x[0] === r.rol)?.[1] },
-      { t: 'Sede', f: r => nomSede(r.sede_id) }, { t: 'Acceso', f: r => r.activo ? h('span', { class: 'estado st-ok' }, 'Habilitado') : h('span', { class: 'estado st-warn' }, 'Pendiente') },
+      { t: 'Sede', f: r => nomSede(r.sede_id) }, { t: 'Acceso', f: r => r.activo ? h('span', { class: 'estado st-ok' }, 'Habilitado')
+        : r.estado_solicitud === 'pendiente' ? h('span', { class: 'estado st-warn' }, 'Solicitud por revisar')
+        : r.estado_solicitud === 'rechazada' ? h('span', { class: 'estado st-danger' }, 'Rechazada')
+        : h('span', { class: 'estado st-muted' }, r.id ? 'Ingresó, sin solicitud' : 'Sin acceso') },
       { t: 'Ya ingresó', f: r => r.id ? '✔' : '' }, { t: 'Último acceso', f: r => fechaHora(r.ultimo_acceso) },
     ], filas.filter(r => !t || quitarTildes(`${r.nombre} ${r.email}`.toLowerCase()).includes(t)), { alClic: r => editar(r) }));
   };
   buscar.oninput = debounce(pintar, 200);
   pintar();
-  caja.replaceChildren(h('div', { class: 'filtros' }, buscar, h('button', { class: 'btn btn-primario', style: { flex: '0 0 auto' }, onclick: () => editar({}, true) }, '➕ Nuevo usuario')),
-    h('p', { class: 'nota' }, `${filas.filter(r => !r.activo).length} usuario(s) esperando que se les habilite el acceso. Quien entra por primera vez con su cuenta Microsoft queda pendiente hasta que se le asigne rol y sede.`), zona);
+  // ---------------------------------------------------------------- solicitudes de acceso
+  const solicitudes = filas.filter(r => r.estado_solicitud === 'pendiente').sort((a, b) => String(a.solicitado_at).localeCompare(String(b.solicitado_at)));
+  const NOM_ROL = Object.fromEntries(ROLES);
+  const resolverSolicitud = u => {
+    const rol = select(ROLES, u.rol_solicitado || u.rol_sugerido || 'dependiente');
+    const sede = select([['', '— ninguna —'], ...estado.sedes.map(s => [s.id, s.nombre])], u.sede_solicitada || u.sede_id || '');
+    modal(`Solicitud de ${u.nombre}`, h('div', {},
+      h('div', { class: 'rejilla' },
+        kv('Correo', u.email), kv('Cargo', u.cargo || '—'), kv('Teléfono', u.telefono || '—'),
+        kv('Sede solicitada', nomSede(u.sede_solicitada) || '—'), kv('Acceso solicitado', NOM_ROL[u.rol_solicitado] || '—'),
+        kv('Rol que tenía en SIFAR', NOM_ROL[u.rol_sugerido] || 'No estaba en SIFAR'), kv('Enviada', fechaHora(u.solicitado_at))),
+      u.comentario ? h('p', {}, h('strong', {}, 'Comentario: '), u.comentario) : null,
+      h('div', { class: 'fila', style: { marginTop: '12px' } }, h('label', { class: 'fila-campo' }, h('span', {}, 'Rol que se asigna'), rol), h('label', { class: 'fila-campo' }, h('span', {}, 'Sede'), sede)),
+      h('p', { class: 'nota' }, 'Dependiente: opera las bodegas de su sede. Consulta: ve existencias y dónde están. Administrador: todo.')), {
+      acciones: [
+        { texto: 'Rechazar', clase: 'btn-peligro', accion: async () => {
+          const m = await pedirMotivo(); if (!m) return false;
+          await rpc('resolver_solicitud_acceso', { p_email: u.email, p_aprobar: false, p_motivo: m });
+          toast('Solicitud rechazada'); refrescarInsignias(); caja.replaceWith(await usuarios());
+        } },
+        { texto: '✔ Aprobar acceso', clase: 'btn-primario', accion: async () => {
+          if (rol.value === 'dependiente' && !sede.value) { toast('Un dependiente debe tener sede', 'error'); return false; }
+          await rpc('resolver_solicitud_acceso', { p_email: u.email, p_aprobar: true, p_rol: rol.value, p_sede: sede.value ? Number(sede.value) : null });
+          toast(`Acceso aprobado como ${NOM_ROL[rol.value]}`); refrescarInsignias(); caja.replaceWith(await usuarios());
+        } }] });
+  };
+  const zonaSolicitudes = solicitudes.length ? h('div', { class: 'aviso aviso-warn' },
+    h('strong', {}, `${solicitudes.length} solicitud(es) de acceso por revisar`),
+    tabla([
+      { t: 'Enviada', f: r => fechaHora(r.solicitado_at) }, { t: 'Nombre', k: 'nombre' }, { t: 'Correo', k: 'email' }, { t: 'Cargo', k: 'cargo' },
+      { t: 'Sede', f: r => nomSede(r.sede_solicitada) }, { t: 'Solicita', f: r => NOM_ROL[r.rol_solicitado] || '' },
+      { t: 'En SIFAR', f: r => NOM_ROL[r.rol_sugerido] || '—' },
+      { t: '', f: () => h('span', { class: 'btn btn-primario btn-peq' }, 'Revisar') },
+    ], solicitudes, { alClic: resolverSolicitud })) : null;
+
+  caja.replaceChildren(zonaSolicitudes, h('div', { class: 'filtros' }, buscar, h('button', { class: 'btn btn-primario', style: { flex: '0 0 auto' }, onclick: () => editar({}, true) }, '➕ Nuevo usuario')),
+    h('p', { class: 'nota' }, 'Cada persona entra con su cuenta Microsoft institucional y envía su solicitud (cargo, sede y acceso que necesita). Usted aprueba asignando el rol y la sede, o la rechaza. Clic en un usuario para cambiar su rol, sede o quitarle el acceso.'), zona);
   return caja;
+}
+
+const kv = (k, v) => h('div', {}, h('div', { class: 'kpi-titulo' }, k), h('div', {}, v));
+function pedirMotivo() {
+  return new Promise(res => {
+    const t = h('textarea', { class: 'campo', rows: 3 });
+    modal('Motivo del rechazo', h('label', { class: 'fila-campo' }, h('span', {}, 'La persona verá este motivo al entrar'), t), {
+      acciones: [{ texto: 'Cancelar', clase: 'btn-sec', accion: () => res(null) },
+        { texto: 'Rechazar', clase: 'btn-peligro', accion: () => { if (t.value.trim().length < 5) { toast('Escriba el motivo', 'error'); return false; } res(t.value.trim()); } }],
+      alCerrar: () => res(null) });
+  });
 }
 
 // ----------------------------------------------------------------------------- catálogo
