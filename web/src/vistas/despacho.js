@@ -5,6 +5,7 @@ import { h, toast, error, num, fecha, fechaHora, chipsProducto, tabla, estadoChi
 import { sb, q, rpc, estado, bodegasOperables, registrarSalida, listarPendientes, descartarPendiente, sincronizar, productoPorCodigo, hoyISO } from '../api.js';
 import { buscadorProducto, enfocarBuscador, lotesDisponibles, resumenLotes, textoLote } from '../componentes.js';
 import { escanearConCamara, camaraDisponible } from '../escaner.js';
+import { excelSalidasDia } from '../reportes.js';
 
 const MODO_KEY = 'sigam:modo_escaneo';
 
@@ -150,7 +151,7 @@ export default async function () {
     try {
       const filas = await q(sb.from('salidas').select('id,numero,fecha,tipo,dui,persona_recibe,estado,creado_at,creado_por,salida_detalle(cantidad,productos(nombre_comercial))')
         .eq('bodega_id', st.bodega).gte('fecha', hoyISO()).order('id', { ascending: false }).limit(100));
-      zonaRecientes.replaceChildren(h('section', { class: 'tarjeta' }, h('h2', {}, `Despachos de hoy en esta bodega (${filas.length})`),
+      zonaRecientes.replaceChildren(reporteDiario(), h('section', { class: 'tarjeta' }, h('h2', {}, `Despachos de hoy en esta bodega (${filas.length})`),
         tabla([
           { t: 'Número', k: 'numero' }, { t: 'Hora', f: r => fechaHora(r.creado_at) },
           { t: 'DUI / persona', f: r => r.dui || r.persona_recibe || '' },
@@ -163,6 +164,32 @@ export default async function () {
           } }, 'Anular') : '' },
         ], filas, { vacio: 'Todavía no hay despachos hoy' })));
     } catch { zonaRecientes.replaceChildren(); }
+  };
+
+  // ---------------------------------------------------------------- reporte diario en Excel
+  let repBodega = null, repFecha = hoyISO();
+  const reporteDiario = () => {
+    const opciones = bodegas.filter(b => ['despacho_medicamentos', 'almacen_insumos'].includes(b.tipo));
+    if (!opciones.length) return null;
+    const actual = opciones.find(b => b.id === st.bodega);
+    if (!repBodega || !opciones.some(b => b.id === repBodega)) repBodega = (actual || opciones[0]).id;
+    const sel = h('select', { class: 'campo' }, opciones.map(b => h('option', { value: b.id, selected: b.id === repBodega }, b.nombre)));
+    sel.onchange = () => { repBodega = Number(sel.value); };
+    const dia = h('input', { class: 'campo', type: 'date', value: repFecha, max: hoyISO() });
+    dia.onchange = () => { repFecha = dia.value || hoyISO(); };
+    const btn = h('button', { class: 'btn btn-primario', onclick: async () => {
+      btn.disabled = true;
+      try {
+        const n = await excelSalidasDia(opciones.find(b => b.id === repBodega), repFecha);
+        toast(n ? `Reporte descargado: ${n} despacho(s)` : 'Reporte descargado (sin despachos ese día)');
+      } catch (e) { error(e); } finally { btn.disabled = false; }
+    } }, '⬇ Reporte diario (Excel)');
+    return h('section', { class: 'tarjeta' }, h('h2', {}, 'Reporte diario de salidas'),
+      h('div', { class: 'filtros' },
+        h('label', { class: 'fila-campo' }, h('span', {}, 'Bodega'), sel),
+        h('label', { class: 'fila-campo' }, h('span', {}, 'Día'), dia),
+        h('div', { class: 'fila-campo' }, h('span', {}, '\u00a0'), btn)),
+      h('p', { class: 'nota' }, 'Excel listo para imprimir en hoja carta: cada despacho con DUI, expediente, producto, lote, vencimiento y cantidad, más una hoja con el resumen por producto.'));
   };
 
   // ---------------------------------------------------------------- controles

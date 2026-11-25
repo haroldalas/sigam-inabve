@@ -133,3 +133,81 @@ export async function excelSivet(ids, nombre) {
   descargar(await wb.xlsx.writeBuffer(), nombre, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
   return lineas.length;
 }
+
+// ----------------------------------------------------------------------------- reporte diario de salidas (Excel compacto, carta vertical)
+export async function excelSalidasDia(bodega, fechaISO) {
+  const salidas = await todas(() => sb.from('salidas')
+    .select('id,numero,creado_at,tipo,dui,expediente,persona_recibe,estado,salida_detalle(cantidad,productos(codigo,nombre_comercial,presentacion),lotes(numero_lote,fecha_vencimiento))')
+    .eq('bodega_id', bodega.id).eq('fecha', fechaISO).eq('estado', 'confirmada').order('id'));
+  const ExcelJS = (await import('exceljs')).default;
+  const wb = new ExcelJS.Workbook(); wb.creator = SISTEMA;
+  const ws = wb.addWorksheet('Salidas', {
+    pageSetup: { paperSize: 1, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, horizontalCentered: true,
+                 margins: { left: 0.25, right: 0.25, top: 0.35, bottom: 0.4, header: 0.15, footer: 0.2 } },
+    headerFooter: { oddFooter: `&L&7${bodega.nombre} · ${fechaISO.split('-').reverse().join('/')}&R&7Página &P de &N` },
+  });
+  const F = { name: 'Calibri', size: 8 };
+  const cols = [['N°', 4], ['Hora', 5.5], ['Despacho', 11.5], ['DUI / recibe', 11.5], ['Exped.', 8], ['Código', 13], ['Producto', 40], ['Lote', 11], ['Vence', 8.5], ['Cant.', 6]];
+  ws.columns = cols.map(([, width]) => ({ width }));
+  const fdia = fechaISO.split('-').reverse().join('/');
+  const lineas = salidas.flatMap(s => s.salida_detalle.map(d => ({ s, d })));
+  const unidades = lineas.reduce((a, x) => a + Number(x.d.cantidad), 0);
+  const personas = new Set(salidas.map(s => s.dui || s.expediente || s.persona_recibe).filter(Boolean)).size;
+
+  ws.mergeCells('A1:J1'); Object.assign(ws.getCell('A1'), { value: `INABVE · SIGAM — Reporte diario de salidas · ${bodega.nombre}`, font: { ...F, size: 11, bold: true, color: { argb: 'FF233152' } } });
+  ws.mergeCells('A2:J2'); Object.assign(ws.getCell('A2'), { value: `Fecha: ${fdia}   ·   ${salidas.length} despachos   ·   ${personas} personas   ·   ${lineas.length} líneas   ·   ${unidades.toLocaleString('es-SV')} unidades`, font: { ...F, size: 9 } });
+  const enc = ws.getRow(3); enc.values = cols.map(c => c[0]); enc.height = 13;
+  enc.eachCell(c => { c.font = { ...F, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF233152' } }; c.alignment = { vertical: 'middle', horizontal: 'center' }; });
+  ws.pageSetup.printTitlesRow = '3:3';
+  ws.views = [{ state: 'frozen', ySplit: 3 }];
+
+  const borde = { bottom: { style: 'hair', color: { argb: 'FFBFC6D4' } } };
+  let n = 0, gris = false;
+  for (const s of salidas) {
+    n++; gris = !gris;
+    const hora = new Date(s.creado_at).toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', hour12: false });
+    s.salida_detalle.forEach((d, i) => {
+      const r = ws.addRow([i ? '' : n, i ? '' : hora, i ? '' : s.numero, i ? '' : (s.dui || s.persona_recibe || ''), i ? '' : (s.expediente || ''),
+        d.productos?.codigo || '', [d.productos?.nombre_comercial, d.productos?.presentacion].filter(Boolean).join(' · '),
+        d.lotes?.numero_lote || '', d.lotes?.fecha_vencimiento ? new Date(d.lotes.fecha_vencimiento + 'T00:00:00Z') : '', Number(d.cantidad)]);
+      r.height = 11;
+      r.eachCell({ includeEmpty: true }, (c, k) => {
+        c.font = F; c.border = borde; c.alignment = { vertical: 'top', shrinkToFit: k === 7 };
+        if (gris) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F4F8' } };
+      });
+      r.getCell(4).numFmt = r.getCell(6).numFmt = '@';
+      r.getCell(9).numFmt = 'dd/mm/yy'; r.getCell(10).numFmt = '#,##0.##'; r.getCell(10).font = { ...F, bold: true };
+      r.getCell(1).alignment = r.getCell(10).alignment = { horizontal: 'right', vertical: 'top' };
+    });
+  }
+  if (!salidas.length) { const r = ws.addRow(['', '', 'Sin despachos confirmados en esta fecha.']); r.getCell(3).font = { ...F, italic: true }; }
+  const t = ws.addRow(['', '', '', '', '', '', 'TOTAL DE UNIDADES', '', '', unidades]);
+  t.eachCell(c => { c.font = { ...F, bold: true }; }); t.getCell(10).numFmt = '#,##0.##';
+  t.getCell(7).alignment = { horizontal: 'right' };
+  ws.addRow([]);
+  const firma = ws.addRow(['', '', 'Despachó (nombre y firma): ______________________________', '', '', '', '', 'Revisó: ______________________']);
+  firma.eachCell(c => { c.font = F; });
+
+  // resumen por producto (segunda hoja)
+  const rs = wb.addWorksheet('Resumen por producto', { pageSetup: { paperSize: 1, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0,
+    margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.15, footer: 0.2 } } });
+  rs.columns = [{ width: 14 }, { width: 52 }, { width: 9 }, { width: 10 }];
+  rs.mergeCells('A1:D1'); Object.assign(rs.getCell('A1'), { value: `Resumen por producto · ${bodega.nombre} · ${fdia}`, font: { ...F, size: 11, bold: true, color: { argb: 'FF233152' } } });
+  const er = rs.getRow(2); er.values = ['Código', 'Producto', 'Despachos', 'Unidades'];
+  er.eachCell(c => { c.font = { ...F, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF233152' } }; });
+  const res = new Map();
+  lineas.forEach(({ s, d }) => {
+    const k = d.productos?.codigo || d.productos?.nombre_comercial;
+    const x = res.get(k) || { codigo: d.productos?.codigo || '', nombre: d.productos?.nombre_comercial || '', desp: new Set(), u: 0 };
+    x.desp.add(s.id); x.u += Number(d.cantidad); res.set(k, x);
+  });
+  [...res.values()].sort((a, b) => a.nombre.localeCompare(b.nombre)).forEach(x => {
+    const r = rs.addRow([x.codigo, x.nombre, x.desp.size, x.u]); r.height = 11;
+    r.eachCell(c => { c.font = F; c.border = borde; }); r.getCell(1).numFmt = '@'; r.getCell(4).numFmt = '#,##0.##';
+  });
+  rs.pageSetup.printTitlesRow = '2:2';
+
+  const nombre = `SIGAM_Salidas_${bodega.nombre.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '')}_${fechaISO}.xlsx`;
+  descargar(await wb.xlsx.writeBuffer(), nombre, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  return salidas.length;
+}
