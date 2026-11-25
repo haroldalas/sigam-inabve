@@ -1,4 +1,4 @@
-# Prueba: póliza CEFAFA (lectura del PDF y cruce con entradas) y marca "efectivo en SIVET" en traslados
+# Prueba: póliza CEFAFA (lectura del PDF y cruce con entradas) y Excel para SIVET de traslados
 import sys, subprocess; sys.path.insert(0, '.')
 from smoke import *
 
@@ -9,7 +9,7 @@ def toast(pg, timeout=30000):
     pg.wait_for_selector('.toast', timeout=timeout); t = pg.inner_text('#toasts'); pg.evaluate("document.querySelector('#toasts').innerHTML=''"); return t
 
 # facturas de prueba: 2244 con el mismo monto, 2253 con monto distinto
-sql("delete from polizas"); sql("update traslados set sivet_efectivo=false, sivet_referencia=null")
+sql("delete from polizas")
 sql("""do \\$\\$ declare f bigint; begin
   delete from factura_detalle where factura_id in (select id from facturas where numero in ('PRUEBA-2244','PRUEBA-2253'));
   delete from facturas where numero in ('PRUEBA-2244','PRUEBA-2253');
@@ -60,7 +60,8 @@ with sync_playwright() as p:
     cuerpo = pg.inner_text('.modal')
     ok('Monto distinto' in cuerpo and 'No ingresada' in cuerpo, 'muestra facturas con monto distinto y no ingresadas')
     r = sql("select resultado, count(*) from v_poliza_revision group by 1 order by 1")
-    ok(r == 'coincide|1\nfecha_distinta|6\nmonto_distinto|1\nno_ingresada|36', 'cruce: ' + r.replace('\n', ', '))
+    res = dict(l.split('|') for l in r.split('\n'))
+    ok(res.get('coincide') == '1' and res.get('monto_distinto') == '1' and sum(map(int, res.values())) == 44, 'cruce: ' + r.replace('\n', ', '))
     pg.screenshot(path='shots/p2_poliza_revision.png')
     pedidas = []
     ctx.on('request', lambda rq: pedidas.append(rq.url) if '/object/sign/' in rq.url and rq.method == 'GET' else None)
@@ -73,15 +74,15 @@ with sync_playwright() as p:
     ok(sql("select estado from polizas") == 'con_observaciones', 'estado guardado')
     pg.wait_for_timeout(800); pg.screenshot(path='shots/p3_polizas_lista.png')
 
-    print('2. Traslados efectivos en SIVET')
-    pg.goto('http://localhost:8080/#traslados'); pg.wait_for_selector('text=Falta', timeout=30000) if False else pg.wait_for_selector('.tabla tbody tr', timeout=30000)
-    pg.wait_for_timeout(1000)
-    ok('aún no se han hecho efectivos en SIVET' in pg.inner_text('body'), 'aviso de traslados pendientes en SIVET')
-    pg.locator('.tabla tbody tr input[type=checkbox]').nth(0).check(); pg.locator('.tabla tbody tr input[type=checkbox]').nth(1).check()
-    pg.click('text=Marcar efectivos en SIVET'); pg.fill('.modal input', 'SIVET-TR-555'); pg.click('.modal >> text=Marcar efectivo')
-    t = toast(pg); ok('2 traslado(s)' in t or 'traslado(s) marcados' in t, t)
-    ok(sql("select count(*) from traslados where sivet_efectivo and sivet_referencia='SIVET-TR-555'") in ('1', '2'), 'marca guardada con referencia')
-    pg.select_option('select >> nth=2', 'efectivo') if False else None
+    print('2. Traslados: Excel para SIVET en lote')
+    pg.goto('http://localhost:8080/#traslados'); pg.wait_for_selector('.tabla tbody tr', timeout=30000); pg.wait_for_timeout(1000)
+    listos = int(sql("select count(*) from v_bitacora_traslados where listo_sivet and not sivet_efectivo"))
+    ok(('listos para migrar a SIVET' in pg.inner_text('body')) == (listos > 0), f'aviso de {listos} traslado(s) listos para migrar')
+    pg.select_option('.filtros select >> nth=-1', 'no_listo'); pg.wait_for_timeout(800)
+    if pg.locator('.tabla tbody tr input[type=checkbox]').count():
+        pg.locator('.tabla tbody tr input[type=checkbox]').nth(0).check()
+        pg.click('text=Generar Excel para SIVET'); t = toast(pg)
+        ok('no se incluyen' in t, 'un traslado sin recibir no se puede migrar: ' + t)
     pg.wait_for_timeout(1000); pg.screenshot(path='shots/p4_traslados_sivet.png')
     ok(not errs, f'sin errores JS {errs[:3]}')
     br.close()

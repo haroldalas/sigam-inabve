@@ -70,10 +70,7 @@ with sync_playwright() as p:
     num = re.search(r'T-\d{4}-\d+', t).group(0)
     with pg.expect_download(timeout=30000) as d: pg.click('.modal-pie >> text=PDF')
     d.value.save_as(f'shots/{num}.pdf'); ok(d.value.suggested_filename.endswith('.pdf'), f'PDF generado: {d.value.suggested_filename}')
-    with pg.expect_download(timeout=30000) as d: pg.click('.modal-pie >> text=Excel para TICS')
-    d.value.save_as(f'shots/{num}.xlsx'); ws = openpyxl.load_workbook(f'shots/{num}.xlsx').active
-    ok([c.value for c in ws[1]][:8] == ['Correlativo','Codigo','Cantidad','Precio','Total','Factura','Fecha de factura','NombreContrato_SIVETWEB'], 'Excel con las 8 columnas de la hoja MIGRAR')
-    ok(ws.max_row == 3 and 'SANTA ANA' in str(ws['H2'].value), f'2 líneas, contrato {ws["H2"].value}')
+    ok(pg.locator('.modal-pie >> text=Excel para').count() == 0, 'recién enviado no ofrece Excel para SIVET (aún no se recibe)')
     pg.click('.modal-pie >> text=Listo'); pg.wait_for_timeout(1500); pg.screenshot(path='shots/f3_bitacora.png')
     ok(not pg.errores, f'sin errores de consola (CSP incluido) {pg.errores[:3]}'); ctx.close()
 
@@ -100,6 +97,28 @@ with sync_playwright() as p:
     pg.select_option('.modal select.campo', 'rechazar'); pg.click('.modal-pie >> text=Resolver'); t = toast(pg); ok('resuelta' in t, f'producto no enviado rechazado: {t}')
     ok(sql(f"select estado from traslados where numero='{num}'") == 'cerrado', 'traslado cerrado al resolver todo')
     ctx.close()
+
+    # ---------------------------------------------------------------- 5b. Excel para SIVET (solo recibido y sin diferencias)
+    print('5b. Excel para SIVET y estado "Ya migrado a SIVET"')
+    ctx, pg = pagina(br, 'admin'); ir(pg, 'traslados'); pg.wait_for_selector('.tabla tbody tr', timeout=30000); pg.wait_for_timeout(800)
+    fila = pg.locator('tr.clicable', has_text=num)
+    ok('Listo para SIVET' in fila.inner_text(), 'con las diferencias resueltas queda "Listo para SIVET"')
+    fila.click(); pg.wait_for_selector('.modal')
+    with pg.expect_download(timeout=30000) as d:
+        pg.click('.modal-pie >> text=Generar Excel para SIVET'); pg.get_by_role('button', name='Generar', exact=True).click()
+    d.value.save_as(f'shots/{num}.xlsx'); ws = openpyxl.load_workbook(f'shots/{num}.xlsx').active
+    ok([c.value for c in ws[1]][:8] == ['Correlativo','Codigo','Cantidad','Precio','Total','Factura','Fecha de factura','NombreContrato_SIVETWEB'], 'Excel con las 8 columnas de la hoja MIGRAR')
+    ok(ws.max_row == 3 and 'SANTA ANA' in str(ws['H2'].value), f'2 líneas, contrato {ws["H2"].value}')
+    rec = sorted(int(float(x)) for x in sql(f"select d.cantidad_recibida from traslado_detalle d join traslados t on t.id=d.traslado_id where t.numero='{num}'").split())
+    ok(sorted([ws['C2'].value, ws['C3'].value]) == rec, f'el Excel lleva las cantidades recibidas {rec}, no las enviadas')
+    t = toast(pg); ok('Ya migrado a SIVET' in t, t)
+    ok(sql(f"select sivet_efectivo||'|'||sivet_referencia from traslados where numero='{num}'") == f'true|SIGAM_{num}_SIVET.xlsx', 'queda "Ya migrado a SIVET" con el nombre del archivo')
+    pg.wait_for_timeout(1000)
+    ok('Ya migrado a SIVET' in pg.locator('tr.clicable', has_text=num).inner_text(), 'la bitácora muestra "Ya migrado a SIVET"')
+    transito = sql("select numero from traslados where estado='enviado' order by id limit 1")
+    ok(sql(f"select (select listo_sivet from v_bitacora_traslados where numero='{transito}')::text") == 'false', f'{transito} en tránsito no está listo para SIVET')
+    pg.screenshot(path='shots/f5b_sivet.png')
+    ok(not pg.errores, f'sin errores de consola {pg.errores[:3]}'); ctx.close()
 
     # ---------------------------------------------------------------- 6. devolución + validación
     print('6. Devolución registrada por la sede y validada por el administrador')
