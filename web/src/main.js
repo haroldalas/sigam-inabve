@@ -35,6 +35,12 @@ const GRUPOS = [
   ['Coordinación', ['pendientes', 'lotes', 'tablero', 'polizas', 'conciliacion', 'liquidacion', 'admin']],
 ];
 
+// replaceChildren/append nativos convierten null en el texto "null": se ignoran los vacíos (… ? x : null)
+for (const m of ['replaceChildren', 'append', 'prepend']) {
+  const orig = Element.prototype[m];
+  Element.prototype[m] = function (...hijos) { return orig.apply(this, hijos.filter(x => x !== null && x !== undefined && x !== false)); };
+}
+
 const app = $('#app');
 
 const rutaInicial = () => ['inicio', 'novedades', 'tablero', 'existencias'].find(rutaPermitida) || 'existencias';
@@ -323,8 +329,22 @@ async function iniciar() {
 
 sb.auth.onAuthStateChange((ev) => { if (ev === 'SIGNED_OUT') pantallaLogin(); });
 
+// Versión nueva publicada: se avisa para recargar (no se recarga sola para no perder un despacho a medio llenar)
 if ('serviceWorker' in navigator && import.meta.env.PROD) {
-  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').catch(() => {}));
+  let avisado = false;
+  const avisar = () => {
+    if (avisado) return; avisado = true;
+    document.body.append(h('div', { class: 'aviso-version', role: 'status' },
+      h('span', {}, 'Hay una versión nueva de SIGAM.'),
+      h('button', { class: 'btn btn-primario btn-peq', onclick: () => location.reload() }, 'Actualizar')));
+  };
+  window.addEventListener('load', () => navigator.serviceWorker.register('/sw.js').then(reg => {
+    const revisar = () => reg.update().catch(() => {});
+    setInterval(revisar, 15 * 60_000);
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) revisar(); });
+  }).catch(() => {}));
+  const habia = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener('controllerchange', () => { if (habia) avisar(); });
 }
 
 iniciar();
