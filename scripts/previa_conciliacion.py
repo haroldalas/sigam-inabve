@@ -38,6 +38,6 @@ for path in [a for a in sys.argv[1:] if not a.startswith('--')]:
     r = json.loads([l for l in out.split('\n') if l.startswith('{')][0])
     r['archivo'] = os.path.basename(path); res.append(r)
 json.dump(res, open('/tmp/previa_resultado.json', 'w'), ensure_ascii=False)
-print(f"{'Contrato':46} {'filas':>5} {'SIVET':>9} {'NoCat':>6} {'Cent+PC':>8} {'Antes':>9} {'Después':>9} {'+':>8} {'-':>8} {'Lotes+':>6} {'Excede':>6}")
+print(f"{'Contrato':46} {'filas':>5} {'SIVET':>9} {'NoCat':>6} {'Central':>8} {'Antes':>9} {'Después':>9} {'+':>8} {'-':>8} {'Lotes+':>6} {'Excede':>6}")
 for r in res:
     print(f"{r['contrato'][:46]:46} {r['filas']:>5} {float(r['sivet_total']):>9,.0f} {float(r['no_encontrado_total']):>6,.0f} {float(r['conservado_total']):>8,.0f} {float(r['actual_total']):>9,.0f} {float(r['final_total']):>9,.0f} {float(r['aumenta']):>8,.0f} {float(r['disminuye']):>8,.0f} {r['lotes_nuevos']:>6} {float(r['conservado_excede']):>6,.0f}")

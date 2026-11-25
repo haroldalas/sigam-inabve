@@ -1,6 +1,7 @@
 // Conciliación de existencias con SIVET (solo administradores).
 // Se sube el Excel "DetallesContrato" de cada contrato; SIVET manda.
-// Bodega Central, Pequeña Cirugía y Campo conservan lo que tiene SIGAM (se actualizan con SIFAR);
+// La Bodega Central conserva lo que tiene SIGAM (se actualiza con SIFAR) y se descuenta de SIVET;
+// Pequeña Cirugía y Campo solo existen en SIGAM/SIFAR: no se tocan;
 // Despacho de Medicamentos y Almacén de Insumos de cada sede quedan iguales a SIVET.
 import { h, toast, error, num, fechaHora, tabla, select, confirmar, exportarExcel } from '../ui.js';
 import { sb, q, rpc, quitarTildes } from '../api.js';
@@ -62,7 +63,7 @@ function cargar(contratos) {
   const todosAplicar = async () => {
     const listos = paneles.filter(p => p.listo && !p.aplicado);
     if (!listos.length) return toast('Primero genere la vista previa de los archivos', 'error');
-    if (!await confirmar('Aplicar todos', `Se aplicará la conciliación de ${listos.length} contrato(s). Despacho y Almacén de cada sede quedarán iguales a SIVET; Central, Pequeña Cirugía y Campo no cambian. ¿Continuar?`, 'Aplicar todos')) return;
+    if (!await confirmar('Aplicar todos', `Se aplicará la conciliación de ${listos.length} contrato(s). Despacho y Almacén de cada sede quedarán iguales a SIVET; Bodega Central, Pequeña Cirugía y Campo no cambian. ¿Continuar?`, 'Aplicar todos')) return;
     let ok = 0;
     for (const [i, p] of listos.entries()) { estadoLote.textContent = `Aplicando ${i + 1} de ${listos.length}…`; if (await p.aplicar(false)) ok++; }
     estadoLote.textContent = `✔ ${ok} de ${listos.length} contratos aplicados`;
@@ -83,7 +84,7 @@ function cargar(contratos) {
       h('h2', {}, 'Conciliar existencias con SIVET'),
       h('p', {}, 'Descargue de SIVET el Excel de cada contrato (hoja "DetallesContrato") y súbalo aquí; puede seleccionar varios a la vez. SIVET manda:'),
       h('ul', {},
-        h('li', {}, 'Bodega Central, Pequeña Cirugía y Campo no cambian (se actualizan con el archivo de SIFAR del cierre): su existencia se descuenta del stock de SIVET.'),
+        h('li', {}, 'Bodega Central, Pequeña Cirugía y Campo no cambian (se actualizan con el archivo de SIFAR del cierre). Solo la existencia de la Bodega Central se descuenta del stock de SIVET; Pequeña Cirugía y Campo no existen en SIVET.'),
         h('li', {}, 'Despacho de Medicamentos y Almacén de Insumos de la sede quedan con el resto, usando los lotes que ya existen (primero los de la misma factura).'),
         h('li', {}, 'Lo que falte se suma al lote de esa factura o se crea en el Despacho (medicamentos) o Almacén (insumos). Lo que SIVET ya no tiene queda en cero.'),
         h('li', {}, 'Primero verá una vista previa; nada cambia hasta que presione "Aplicar". Cada cambio queda en el kardex como "Conciliación SIVET".')),
@@ -121,12 +122,12 @@ async function panelArchivo(caja, file, contratos) {
     const tablaZona = h('div');
     const cols = [
       { t: 'Código', k: 'codigo' }, { t: 'Producto', k: 'producto' },
-      { t: 'SIVET', k: 'sivet', num: true }, { t: 'Central + P.C. + Campo', k: 'central_pc', num: true },
+      { t: 'SIVET', k: 'sivet', num: true }, { t: 'Bodega Central', k: 'central_pc', num: true },
       { t: 'SIGAM antes', k: 'actual', num: true }, { t: 'Queda', k: 'final', num: true },
       { t: 'Diferencia', num: true, f: x => h('strong', { style: { color: Number(x.diferencia) > 0 ? 'var(--ok)' : Number(x.diferencia) < 0 ? 'var(--danger)' : '' } }, (Number(x.diferencia) > 0 ? '+' : '') + num(x.diferencia)),
         exportar: x => Number(x.diferencia), ord: x => Number(x.diferencia) },
-      { t: 'Nota', f: x => [Number(x.lotes_nuevos) ? 'lote nuevo' : '', Number(x.central_pc_excede) ? `Central/P.C./Campo tiene ${num(x.central_pc_excede)} más que SIVET` : ''].filter(Boolean).join(' · '),
-        exportar: x => [Number(x.lotes_nuevos) ? 'lote nuevo' : '', Number(x.central_pc_excede) ? `Central/P.C. excede ${x.central_pc_excede}` : ''].filter(Boolean).join(' · ') },
+      { t: 'Nota', f: x => [Number(x.lotes_nuevos) ? 'lote nuevo' : '', Number(x.central_pc_excede) ? `Bodega Central tiene ${num(x.central_pc_excede)} más que SIVET` : ''].filter(Boolean).join(' · '),
+        exportar: x => [Number(x.lotes_nuevos) ? 'lote nuevo' : '', Number(x.central_pc_excede) ? `Bodega Central excede ${x.central_pc_excede}` : ''].filter(Boolean).join(' · ') },
     ];
     const pintarTabla = () => tablaZona.replaceChildren(tabla(cols, soloCambios ? r.detalle.filter(x => Number(x.diferencia) !== 0 || Number(x.central_pc_excede)) : r.detalle, { vacio: 'Sin diferencias: SIGAM ya coincide con SIVET' }));
     const chk = h('input', { type: 'checkbox', checked: true, onchange: e => { soloCambios = e.target.checked; pintarTabla(); } });
@@ -135,7 +136,7 @@ async function panelArchivo(caja, file, contratos) {
     const btnAplicar = h('button', { class: 'btn btn-primario', onclick: () => aplicar(true) }, '✔ Aplicar conciliación');
     zona.replaceChildren(
       h('div', { class: 'rejilla' },
-        k('Stock SIVET', num(r.sivet_total)), k('Se conserva en Central, P. Cirugía y Campo', num(r.conservado_total)),
+        k('Stock SIVET', num(r.sivet_total)), k('Se conserva en Bodega Central', num(r.conservado_total)),
         k('Despacho/Almacén antes', num(r.actual_total)), k('Queda después', num(r.final_total)),
         k('Aumenta', '+' + num(r.aumenta), 'var(--ok)'), k('Disminuye', '−' + num(r.disminuye), 'var(--danger)'),
         k('Productos que cambian', num(r.productos_cambian)), k('Lotes que se crean o reponen', num(r.lotes_nuevos))),
@@ -144,7 +145,7 @@ async function panelArchivo(caja, file, contratos) {
         h('ul', {}, r.no_encontrados.slice(0, 15).map(x => h('li', {}, `Fila ${x.fila}: ${x.codigo || 'sin código'} · ${x.producto} · factura ${x.factura || '—'} · ${num(x.stock)} u.`))),
         h('small', {}, 'Agregue esos productos al catálogo (Administración) con el mismo código de SIVET y vuelva a subir el archivo.')) : null,
       Number(r.conservado_excede) > 0 ? h('div', { class: 'aviso aviso-info' },
-        `Bodega Central, Pequeña Cirugía y Campo tienen ${num(r.conservado_excede)} unidades más de lo que SIVET registra para este contrato. No se modifican; revise esos productos (columna Nota).`) : null,
+        `La Bodega Central tiene ${num(r.conservado_excede)} unidades más de lo que SIVET registra para este contrato. No se modifican; revise esos productos (columna Nota).`) : null,
       Number(r.carga_inicial_sin_usar) > 0 ? h('p', { class: 'nota' },
         `${num(r.carga_inicial_sin_usar)} unidades en lotes sin contrato (carga inicial de SIFAR) no se usaron y se dejan como están: pueden pertenecer a otro contrato.`) : null,
       h('div', { class: 'filtros', style: { marginTop: '10px' } },

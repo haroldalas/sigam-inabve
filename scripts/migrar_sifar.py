@@ -172,16 +172,16 @@ PROVS = [  # id, nombre, nombre_sivet, es_cefafa, carga_inicial, activo
     (5, "APAMO", "APAMO", False, False, True), (6, "FOPROLYD", "FOPROLYD", False, False, True),
     (7, "SUPLIDORES DIVERSOS", "SUPLIDORES DIVERSOS", False, False, True),
     (8, "DADA DADA Y CÍA", "DADA DADA Y CÍA", False, False, True), (9, "CIENFUEGOS", "CIENFUEGOS", False, False, True),
-    (10, "COPROSER", "COPROSER", False, False, True), (11, "TECMED", "TECMED", False, False, True),
+    (10, "COPROSER", "COPROSER", False, False, True), (11, "TECMED", "CIENFUEGOS (antes TECMED)", False, False, False),
     (12, "PROMEDIC", "PROMEDIC", False, False, True), (13, "PISA", "PISA", False, False, True),
     (14, "AMERICARE", "AMERICARE", False, False, True), (15, "MEDICALD INVERSIONES", "MEDICALD INVERSIONES", False, False, True),
     (16, "FARMA", "FARMA", False, False, False),
     (17, "CARGA INICIAL INVENTARIO", "CARGA INICIAL", False, True, True),
 ]
-PROV_MAP = {1: 1, 10: 1, 16: 1, 4: 2, 12: 2, 5: 3, 6: 4, 15: 5, 7: 6, 8: 7, 9: 8, 11: 9, 13: 10, 14: 11,
+PROV_MAP = {1: 1, 10: 1, 16: 1, 4: 2, 12: 2, 5: 3, 6: 4, 15: 5, 7: 6, 8: 7, 9: 8, 11: 9, 13: 10, 14: 9,
             17: 12, 18: 13, 19: 14, 20: 15, 2: 16, 3: 17}
 nota("- Proveedores unificados: «Cefafa» y «CEFAFA» en uno solo; los dos «EQUIMED» en uno; «ASOCIACION DE CIEGOS» = ASCES; "
-     "«CARLOS CIENFUEGOS» = CIENFUEGOS; el proveedor que tenía un código de barras como nombre (1 factura DTE) se asignó a CEFAFA.")
+     "«CARLOS CIENFUEGOS» y «TECMED» = CIENFUEGOS; el proveedor que tenía un código de barras como nombre (1 factura DTE) se asignó a CEFAFA.")
 # números de contrato SIVET: (JPII, SA, CH, SM)
 NUM = {("CEFAFA", "medicamento"): (1, 2, 3, 4), ("CEFAFA", "insumo"): (5, 6, 7, 8),
        ("EQUIMED", "insumo"): (9, 10, 11, 12), ("S.T. MEDIC", "insumo"): (13, 14, 15, 16),
