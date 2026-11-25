@@ -137,7 +137,7 @@ export async function excelSivet(ids, nombre) {
 // ----------------------------------------------------------------------------- reporte diario de salidas (Excel compacto, carta vertical)
 export async function excelSalidasDia(bodega, fechaISO) {
   const salidas = await todas(() => sb.from('salidas')
-    .select('id,numero,creado_at,tipo,dui,expediente,persona_recibe,estado,salida_detalle(cantidad,productos(codigo,nombre_comercial,presentacion),lotes(numero_lote,fecha_vencimiento))')
+    .select('id,numero,creado_at,tipo,dui,expediente,persona_recibe,estado,salida_detalle(cantidad,productos(codigo,nombre_comercial,presentacion),lotes(numero_lote,fecha_vencimiento,precio_unitario))')
     .eq('bodega_id', bodega.id).eq('fecha', fechaISO).eq('estado', 'confirmada').order('id'));
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook(); wb.creator = SISTEMA;
@@ -147,15 +147,18 @@ export async function excelSalidasDia(bodega, fechaISO) {
     headerFooter: { oddFooter: `&L&7${bodega.nombre} · ${fechaISO.split('-').reverse().join('/')}&R&7Página &P de &N` },
   });
   const F = { name: 'Calibri', size: 8 };
-  const cols = [['N°', 4], ['Hora', 5.5], ['Despacho', 11.5], ['DUI / recibe', 11.5], ['Exped.', 8], ['Código', 13], ['Producto', 40], ['Lote', 11], ['Vence', 8.5], ['Cant.', 6]];
+  const cols = [['N°', 3.5], ['Hora', 5], ['Despacho', 11], ['DUI / recibe', 10.5], ['Exped.', 7], ['Código', 12.5], ['Producto', 34], ['Lote', 10.5], ['Vence', 7.5], ['Cant.', 5], ['P. unit.', 7.5], ['Subtotal', 8.5]];
+  const precio = d => Number(d.lotes?.precio_unitario || 0);
+  const DIN = '"$"#,##0.00';
   ws.columns = cols.map(([, width]) => ({ width }));
   const fdia = fechaISO.split('-').reverse().join('/');
   const lineas = salidas.flatMap(s => s.salida_detalle.map(d => ({ s, d })));
   const unidades = lineas.reduce((a, x) => a + Number(x.d.cantidad), 0);
+  const montoTotal = Math.round(lineas.reduce((a, x) => a + Math.round(Number(x.d.cantidad) * precio(x.d) * 100), 0)) / 100;
   const personas = new Set(salidas.map(s => s.dui || s.expediente || s.persona_recibe).filter(Boolean)).size;
 
-  ws.mergeCells('A1:J1'); Object.assign(ws.getCell('A1'), { value: `INABVE · SIGAM — Reporte diario de salidas · ${bodega.nombre}`, font: { ...F, size: 11, bold: true, color: { argb: 'FF233152' } } });
-  ws.mergeCells('A2:J2'); Object.assign(ws.getCell('A2'), { value: `Fecha: ${fdia}   ·   ${salidas.length} despachos   ·   ${personas} personas   ·   ${lineas.length} líneas   ·   ${unidades.toLocaleString('es-SV')} unidades`, font: { ...F, size: 9 } });
+  ws.mergeCells('A1:L1'); Object.assign(ws.getCell('A1'), { value: `INABVE · SIGAM — Reporte diario de salidas · ${bodega.nombre}`, font: { ...F, size: 11, bold: true, color: { argb: 'FF233152' } } });
+  ws.mergeCells('A2:L2'); Object.assign(ws.getCell('A2'), { value: `Fecha: ${fdia}   ·   ${salidas.length} despachos   ·   ${personas} personas   ·   ${lineas.length} líneas   ·   ${unidades.toLocaleString('es-SV')} unidades   ·   Monto: $${montoTotal.toLocaleString('es-SV', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, font: { ...F, size: 9 } });
   const enc = ws.getRow(3); enc.values = cols.map(c => c[0]); enc.height = 13;
   enc.eachCell(c => { c.font = { ...F, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF233152' } }; c.alignment = { vertical: 'middle', horizontal: 'center' }; });
   ws.pageSetup.printTitlesRow = '3:3';
@@ -169,7 +172,8 @@ export async function excelSalidasDia(bodega, fechaISO) {
     s.salida_detalle.forEach((d, i) => {
       const r = ws.addRow([i ? '' : n, i ? '' : hora, i ? '' : s.numero, i ? '' : (s.dui || s.persona_recibe || ''), i ? '' : (s.expediente || ''),
         d.productos?.codigo || '', [d.productos?.nombre_comercial, d.productos?.presentacion].filter(Boolean).join(' · '),
-        d.lotes?.numero_lote || '', d.lotes?.fecha_vencimiento ? new Date(d.lotes.fecha_vencimiento + 'T00:00:00Z') : '', Number(d.cantidad)]);
+        d.lotes?.numero_lote || '', d.lotes?.fecha_vencimiento ? new Date(d.lotes.fecha_vencimiento + 'T00:00:00Z') : '', Number(d.cantidad),
+        precio(d), { formula: `J${ws.rowCount + 1}*K${ws.rowCount + 1}`, result: Math.round(Number(d.cantidad) * precio(d) * 100) / 100 }]);
       r.height = 11;
       r.eachCell({ includeEmpty: true }, (c, k) => {
         c.font = F; c.border = borde; c.alignment = { vertical: 'top', shrinkToFit: k === 7 };
@@ -177,12 +181,21 @@ export async function excelSalidasDia(bodega, fechaISO) {
       });
       r.getCell(4).numFmt = r.getCell(6).numFmt = '@';
       r.getCell(9).numFmt = 'dd/mm/yy'; r.getCell(10).numFmt = '#,##0.##'; r.getCell(10).font = { ...F, bold: true };
+      r.getCell(11).numFmt = r.getCell(12).numFmt = DIN;
       r.getCell(1).alignment = r.getCell(10).alignment = { horizontal: 'right', vertical: 'top' };
     });
+    if (s.salida_detalle.length > 1) {   // subtotal del despacho
+      const st = s.salida_detalle.reduce((a, d) => a + Math.round(Number(d.cantidad) * precio(d) * 100) / 100, 0);
+      const r = ws.addRow(['', '', '', '', '', '', `Subtotal ${s.numero}`, '', '', '', '', st]); r.height = 10.5;
+      r.eachCell({ includeEmpty: true }, (c, k) => { c.font = { ...F, size: 7, italic: true, bold: k === 12 }; c.border = borde;
+        if (gris) c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFF2F4F8' } }; });
+      r.getCell(7).alignment = { horizontal: 'right' }; r.getCell(12).numFmt = DIN;
+    }
   }
   if (!salidas.length) { const r = ws.addRow(['', '', 'Sin despachos confirmados en esta fecha.']); r.getCell(3).font = { ...F, italic: true }; }
-  const t = ws.addRow(['', '', '', '', '', '', 'TOTAL DE UNIDADES', '', '', unidades]);
-  t.eachCell(c => { c.font = { ...F, bold: true }; }); t.getCell(10).numFmt = '#,##0.##';
+  const t = ws.addRow(['', '', '', '', '', '', 'TOTAL DEL DÍA', '', '', unidades, '', montoTotal]);
+  t.eachCell(c => { c.font = { ...F, bold: true, size: 9 }; c.border = { top: { style: 'thin', color: { argb: 'FF233152' } } }; });
+  t.getCell(10).numFmt = '#,##0.##'; t.getCell(12).numFmt = DIN;
   t.getCell(7).alignment = { horizontal: 'right' };
   ws.addRow([]);
   const firma = ws.addRow(['', '', 'Despachó (nombre y firma): ______________________________', '', '', '', '', 'Revisó: ______________________']);
@@ -191,20 +204,22 @@ export async function excelSalidasDia(bodega, fechaISO) {
   // resumen por producto (segunda hoja)
   const rs = wb.addWorksheet('Resumen por producto', { pageSetup: { paperSize: 1, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0,
     margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.15, footer: 0.2 } } });
-  rs.columns = [{ width: 14 }, { width: 52 }, { width: 9 }, { width: 10 }];
-  rs.mergeCells('A1:D1'); Object.assign(rs.getCell('A1'), { value: `Resumen por producto · ${bodega.nombre} · ${fdia}`, font: { ...F, size: 11, bold: true, color: { argb: 'FF233152' } } });
-  const er = rs.getRow(2); er.values = ['Código', 'Producto', 'Despachos', 'Unidades'];
+  rs.columns = [{ width: 14 }, { width: 46 }, { width: 9 }, { width: 9 }, { width: 11 }];
+  rs.mergeCells('A1:E1'); Object.assign(rs.getCell('A1'), { value: `Resumen por producto · ${bodega.nombre} · ${fdia}`, font: { ...F, size: 11, bold: true, color: { argb: 'FF233152' } } });
+  const er = rs.getRow(2); er.values = ['Código', 'Producto', 'Despachos', 'Unidades', 'Monto'];
   er.eachCell(c => { c.font = { ...F, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF233152' } }; });
   const res = new Map();
   lineas.forEach(({ s, d }) => {
     const k = d.productos?.codigo || d.productos?.nombre_comercial;
-    const x = res.get(k) || { codigo: d.productos?.codigo || '', nombre: d.productos?.nombre_comercial || '', desp: new Set(), u: 0 };
-    x.desp.add(s.id); x.u += Number(d.cantidad); res.set(k, x);
+    const x = res.get(k) || { codigo: d.productos?.codigo || '', nombre: d.productos?.nombre_comercial || '', desp: new Set(), u: 0, m: 0 };
+    x.desp.add(s.id); x.u += Number(d.cantidad); x.m += Math.round(Number(d.cantidad) * precio(d) * 100) / 100; res.set(k, x);
   });
   [...res.values()].sort((a, b) => a.nombre.localeCompare(b.nombre)).forEach(x => {
-    const r = rs.addRow([x.codigo, x.nombre, x.desp.size, x.u]); r.height = 11;
-    r.eachCell(c => { c.font = F; c.border = borde; }); r.getCell(1).numFmt = '@'; r.getCell(4).numFmt = '#,##0.##';
+    const r = rs.addRow([x.codigo, x.nombre, x.desp.size, x.u, x.m]); r.height = 11;
+    r.eachCell(c => { c.font = F; c.border = borde; }); r.getCell(1).numFmt = '@'; r.getCell(4).numFmt = '#,##0.##'; r.getCell(5).numFmt = DIN;
   });
+  const tr = rs.addRow(['', 'TOTAL', salidas.length, unidades, montoTotal]);
+  tr.eachCell(c => { c.font = { ...F, bold: true }; }); tr.getCell(4).numFmt = '#,##0.##'; tr.getCell(5).numFmt = DIN;
   rs.pageSetup.printTitlesRow = '2:2';
 
   const nombre = `SIGAM_Salidas_${bodega.nombre.normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Za-z0-9]+/g, '')}_${fechaISO}.xlsx`;

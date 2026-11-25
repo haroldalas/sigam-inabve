@@ -189,7 +189,7 @@ export default async function () {
         h('label', { class: 'fila-campo' }, h('span', {}, 'Bodega'), sel),
         h('label', { class: 'fila-campo' }, h('span', {}, 'Día'), dia),
         h('div', { class: 'fila-campo' }, h('span', {}, '\u00a0'), btn)),
-      h('p', { class: 'nota' }, 'Excel listo para imprimir en hoja carta: cada despacho con DUI, expediente, producto, lote, vencimiento y cantidad, más una hoja con el resumen por producto.'));
+      h('p', { class: 'nota' }, 'Excel listo para imprimir en hoja carta: cada despacho con DUI, expediente, producto, lote, vencimiento, cantidad, precio y subtotal; total del día y una hoja con el resumen por producto.'));
   };
 
   // ---------------------------------------------------------------- controles
