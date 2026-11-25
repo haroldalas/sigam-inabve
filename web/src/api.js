@@ -27,6 +27,42 @@ export async function iniciarSesionMicrosoft() {
   if (error) throw error;
 }
 
+// Correo institucional + contraseña (mientras Informática registra SIGAM en Microsoft Entra ID)
+export const DOMINIO = '@inabve.gob.sv';
+export const correoInstitucional = u => {
+  const e = String(u || '').trim().toLowerCase().replace(/@.*$/, '');
+  return e ? e + DOMINIO : '';
+};
+const MENSAJES_AUTH = [
+  [/invalid login credentials/i, 'Correo o contraseña incorrectos'],
+  [/already (been )?registered|already exists/i, 'Ya existe una cuenta con ese correo. Entre con su contraseña; si usted no la creó, avise a un administrador.'],
+  [/database error saving new user/i, 'Solo se permiten cuentas institucionales @inabve.gob.sv'],
+  [/password should be at least/i, 'La contraseña es muy corta'],
+  [/rate limit|too many/i, 'Demasiados intentos. Espere unos minutos y vuelva a intentar.'],
+  [/email not confirmed/i, 'Su correo aún no está confirmado'],
+];
+const errorAuth = e => { const m = MENSAJES_AUTH.find(([r]) => r.test(e?.message || '')); return m ? new Error(m[1]) : e; };
+
+export async function entrarConClave(usuario, clave) {
+  const email = correoInstitucional(usuario);
+  const { error } = await sb.auth.signInWithPassword({ email, password: clave });
+  if (error) throw errorAuth(error);
+}
+
+export async function crearCuenta(usuario, clave, nombre) {
+  const email = correoInstitucional(usuario);
+  const { data, error } = await sb.auth.signUp({ email, password: clave, options: { data: { full_name: nombre.trim() } } });
+  if (error) throw errorAuth(error);
+  return !!data.session;          // false: hay que confirmar el correo antes de entrar
+}
+
+export async function cambiarClave(clave) {
+  const { error } = await sb.auth.updateUser({ password: clave });
+  if (error) throw errorAuth(error);
+  const { error: e2 } = await sb.rpc('clave_cambiada');
+  if (e2) throw e2;
+}
+
 export async function cerrarSesion() {
   await sb.auth.signOut();
   estado.perfil = null;

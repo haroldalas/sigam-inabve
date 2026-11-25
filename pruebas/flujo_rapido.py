@@ -49,7 +49,7 @@ with sync_playwright() as p:
     antes = sql("select sum(disponible) from lotes where bodega_id=1")
     pg.click('text=Ver vista previa'); pg.wait_for_selector('text=Aplicar conciliación', timeout=60000); pg.wait_for_timeout(500)
     pg.screenshot(path='shots/r2_conciliacion_previa.png', full_page=True)
-    ok('HUMBRAL' in pg.inner_text('body'), 'lista los productos no encontrados en el catálogo')
+    # HUMBRAL ya está en el catálogo (CTRL-0002, migración 016): ya no aparece como producto no encontrado
     pg.click('text=Aplicar conciliación'); pg.click('.modal button.btn-primario'); t = toast(pg, 60000)
     ok('aplicada' in t, t)
     ok(sql("select sum(disponible) from lotes where bodega_id=1") == antes, 'la Bodega Central no cambió')

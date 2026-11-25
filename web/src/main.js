@@ -5,6 +5,7 @@ import '@fontsource/montserrat/700.css';
 import './estilos.css';
 import { h, $, toast, error, cargando, fechaHora } from './ui.js';
 import { sb, estado, cargarPerfil, cargarCatalogosBase, iniciarSesionMicrosoft, cerrarSesion, esAdmin, esDependiente,
+  DOMINIO, correoInstitucional, entrarConClave, crearCuenta, cambiarClave,
   nombreSede, pendientes, alCambiarCola, sincronizar, q, rpc, productos } from './api.js';
 
 const RUTAS = {
@@ -46,19 +47,123 @@ function rutaPermitida(clave) {
 }
 
 // ----------------------------------------------------------------------------- pantallas sin sesión
+// Con VITE_LOGIN_MICROSOFT=1 el botón usa Microsoft Entra ID; sin él, correo institucional + contraseña
+const LOGIN_MICROSOFT = import.meta.env.VITE_LOGIN_MICROSOFT === '1';
+
 function pantallaLogin(mensaje) {
-  app.replaceChildren(h('main', { class: 'login' },
-    h('div', { class: 'login-caja' },
-      h('img', { src: '/img/inabve-color.png', alt: 'INABVE', class: 'login-logo' }),
-      h('h1', {}, 'SIGAM-INABVE'),
-      h('p', { class: 'login-sub' }, 'Sistema Integrado de Gestión de Abastecimiento Médico'),
-      mensaje ? h('p', { class: 'aviso aviso-error' }, mensaje) : null,
+  const caja = h('div', { class: 'login-caja' });
+  const cabecera = () => [
+    h('img', { src: '/img/inabve-color.png', alt: 'INABVE', class: 'login-logo' }),
+    h('h1', {}, 'SIGAM-INABVE'),
+    h('p', { class: 'login-sub' }, 'Sistema Integrado de Gestión de Abastecimiento Médico')];
+  const avisoError = h('p', { class: 'aviso aviso-error', role: 'alert' });
+  const mostrarError = m => { avisoError.textContent = m || ''; avisoError.classList.toggle('oculto', !m); };
+  const campoUsuario = () => h('div', { class: 'campo-correo' },
+    h('input', { class: 'campo', name: 'usuario', autocomplete: 'username', autocapitalize: 'none', spellcheck: 'false', placeholder: 'nombre.apellido' }),
+    h('span', {}, DOMINIO));
+  const campoClave = (ph, ac = 'current-password') => h('input', { class: 'campo', type: 'password', autocomplete: ac, placeholder: ph });
+  const enviar = (form, fn) => form.addEventListener('submit', async ev => {
+    ev.preventDefault(); mostrarError('');
+    const b = form.querySelector('button[type=submit]'); b.disabled = true;
+    try { await fn(); } catch (e) { mostrarError(e.message || String(e)); } finally { b.disabled = false; }
+  });
+  const enlace = (texto, fn) => h('button', { type: 'button', class: 'btn-enlace', onclick: fn }, texto);
+
+  const inicio = () => {
+    mostrarError(mensaje);
+    caja.replaceChildren(...cabecera(), avisoError,
       h('button', { class: 'btn btn-primario btn-grande btn-ms', onclick: async () => {
+        if (!LOGIN_MICROSOFT) return entrar();
         try { await iniciarSesionMicrosoft(); } catch (e) { error(e); }
       } }, h('span', { class: 'ms-logo', 'aria-hidden': 'true' }), 'Iniciar sesión con cuenta institucional'),
-      h('p', { class: 'login-nota' }, 'Solo cuentas @inabve.gob.sv'),
-    ),
+      h('p', { class: 'login-nota' }, 'Solo cuentas @inabve.gob.sv'));
+  };
+
+  const pasoMs = (titulo, ...hijos) => caja.replaceChildren(
+    h('div', { class: 'ms-paso-cab' }, h('span', { class: 'ms-logo', 'aria-hidden': 'true' }), h('span', {}, 'Cuenta institucional INABVE')),
+    h('h2', { class: 'ms-titulo' }, titulo), avisoError, ...hijos);
+
+  const entrar = () => {
+    mostrarError('');
+    const usuario = campoUsuario(); const clave = campoClave('Contraseña');
+    const form = h('form', { class: 'ms-form' }, usuario, clave,
+      h('button', { type: 'submit', class: 'btn btn-primario btn-grande' }, 'Entrar'));
+    enviar(form, async () => {
+      const u = usuario.querySelector('input').value;
+      if (!correoInstitucional(u)) throw new Error('Escriba su usuario institucional');
+      if (!clave.value) throw new Error('Escriba su contraseña');
+      await entrarConClave(u, clave.value); await iniciar();
+    });
+    pasoMs('Iniciar sesión', form,
+      h('div', { class: 'ms-enlaces' },
+        enlace('¿Primera vez? Crear mi cuenta', crear),
+        enlace('¿Olvidó su contraseña?', olvido),
+        enlace('← Regresar', inicio)));
+    setTimeout(() => usuario.querySelector('input').focus(), 30);
+  };
+
+  const crear = () => {
+    mostrarError('');
+    const nombre = h('input', { class: 'campo', autocomplete: 'name', placeholder: 'Nombre completo' });
+    const usuario = campoUsuario(); const clave = campoClave('Contraseña (mínimo 8 caracteres)', 'new-password');
+    const clave2 = campoClave('Repita la contraseña', 'new-password');
+    const form = h('form', { class: 'ms-form' }, nombre, usuario, clave, clave2,
+      h('button', { type: 'submit', class: 'btn btn-primario btn-grande' }, 'Crear cuenta'));
+    enviar(form, async () => {
+      const u = usuario.querySelector('input').value;
+      if (nombre.value.trim().length < 5) throw new Error('Escriba su nombre completo');
+      if (!correoInstitucional(u)) throw new Error('Escriba su usuario institucional (lo que va antes de @inabve.gob.sv)');
+      if (clave.value.length < 8) throw new Error('La contraseña debe tener al menos 8 caracteres');
+      if (clave.value !== clave2.value) throw new Error('Las contraseñas no coinciden');
+      const conSesion = await crearCuenta(u, clave.value, nombre.value);
+      if (conSesion) return iniciar();
+      pasoMs('Revise su correo', h('p', {}, `Enviamos un enlace de confirmación a ${correoInstitucional(u)}. Ábralo y luego entre con su contraseña.`),
+        enlace('← Regresar', inicio));
+    });
+    pasoMs('Crear mi cuenta', h('p', { class: 'nota' }, 'Use su correo institucional. Después llenará una solicitud y un administrador le dará acceso.'), form,
+      h('div', { class: 'ms-enlaces' }, enlace('Ya tengo cuenta: iniciar sesión', entrar), enlace('← Regresar', inicio)));
+    setTimeout(() => nombre.focus(), 30);
+  };
+
+  const olvido = () => {
+    mostrarError('');
+    pasoMs('¿Olvidó su contraseña?',
+      h('p', {}, 'Pida a un administrador de SIGAM (Harold Alas u Oscar Rivas) que le asigne una contraseña temporal. Al entrar con ella, el sistema le pedirá crear una nueva.'),
+      h('div', { class: 'ms-enlaces' }, enlace('← Iniciar sesión', entrar)));
+  };
+
+  inicio();
+  app.replaceChildren(h('main', { class: 'login' }, caja,
     h('footer', { class: 'login-pie' }, 'Departamento de Programas de Salud Integral · INABVE')));
+}
+
+// Contraseña temporal asignada por un administrador, o cambio voluntario
+function pantallaCambioClave(obligatorio = true) {
+  const caja = h('div', { class: 'login-caja' });
+  const avisoError = h('p', { class: 'aviso aviso-error oculto', role: 'alert' });
+  const clave = h('input', { class: 'campo', type: 'password', autocomplete: 'new-password', placeholder: 'Nueva contraseña (mínimo 8 caracteres)' });
+  const clave2 = h('input', { class: 'campo', type: 'password', autocomplete: 'new-password', placeholder: 'Repita la nueva contraseña' });
+  const form = h('form', { class: 'ms-form' }, clave, clave2, h('button', { type: 'submit', class: 'btn btn-primario btn-grande' }, 'Guardar contraseña'));
+  form.addEventListener('submit', async ev => {
+    ev.preventDefault(); avisoError.classList.add('oculto');
+    const b = form.querySelector('button'); b.disabled = true;
+    try {
+      if (clave.value.length < 8) throw new Error('La contraseña debe tener al menos 8 caracteres');
+      if (clave.value !== clave2.value) throw new Error('Las contraseñas no coinciden');
+      await cambiarClave(clave.value); toast('Contraseña actualizada');
+      if (obligatorio) iniciar(); else location.reload();
+    } catch (e) { avisoError.textContent = e.message; avisoError.classList.remove('oculto'); } finally { b.disabled = false; }
+  });
+  caja.append(
+    h('div', { class: 'ms-paso-cab' }, h('span', { class: 'ms-logo', 'aria-hidden': 'true' }), h('span', {}, estado.perfil?.email || 'Cuenta institucional INABVE')),
+    h('h2', { class: 'ms-titulo' }, obligatorio ? 'Cree una contraseña nueva' : 'Cambiar contraseña'),
+    obligatorio ? h('p', { class: 'nota' }, 'Entró con una contraseña temporal. Escriba una nueva que solo usted conozca.') : null,
+    avisoError, form,
+    h('div', { class: 'ms-enlaces' }, obligatorio
+      ? h('button', { type: 'button', class: 'btn-enlace', onclick: cerrarSesion }, 'Cerrar sesión')
+      : h('button', { type: 'button', class: 'btn-enlace', onclick: () => location.reload() }, '← Regresar')));
+  app.replaceChildren(h('main', { class: 'login' }, caja));
+  setTimeout(() => clave.focus(), 30);
 }
 
 // Usuario sin acceso: envía su solicitud; un administrador le asigna rol y sede
@@ -142,6 +247,7 @@ function armarEstructura() {
         insigniaCola,
         h('div', { class: 'usuario' }, h('strong', {}, p.nombre),
           h('small', {}, rolTxt + (p.sede_id ? ' · ' + nombreSede(p.sede_id) : ''))),
+        LOGIN_MICROSOFT ? null : h('button', { class: 'btn btn-claro btn-peq', title: 'Cambiar contraseña', onclick: () => pantallaCambioClave(false) }, '🔑'),
         h('button', { class: 'btn btn-claro btn-peq', onclick: cerrarSesion }, 'Salir'),
         h('img', { src: '/img/gobierno-blanco.png', alt: 'Gobierno de El Salvador', class: 'gob-logo' }))),
     h('div', { class: 'cuerpo' }, menu, h('div', { class: 'velo', onclick: () => document.body.classList.remove('menu-abierto') }), contenido));
@@ -189,6 +295,7 @@ async function iniciar() {
   try {
     const perfil = await cargarPerfil();
     if (!perfil) return pantallaLogin();
+    if (perfil.debe_cambiar_clave) return pantallaCambioClave(true);
     if (!perfil.activo || !perfil.rol) return pantallaPendiente();
     await cargarCatalogosBase();
     estado.bodegas.forEach(b => { b._sede = nombreSede(b.sede_id); });

@@ -193,6 +193,36 @@ http.createServer(async (req, res) => {
     if (req.method === 'OPTIONS') { res.writeHead(204, { 'access-control-allow-origin': '*', 'access-control-allow-headers': '*', 'access-control-allow-methods': '*' }); return res.end(); }
     if (url.pathname.startsWith('/rest/v1/')) return await rest(req, res, url.pathname, url, cuerpo);
     if (url.pathname.startsWith('/storage/v1/')) return almacenamiento(req, res, url, binario, cuerpo);
+    // correo + contraseña (imita GoTrue con "Confirm email" desactivado)
+    const sesionDe = u => {
+      const b = d => Buffer.from(JSON.stringify(d)).toString('base64url');
+      const t = `${b({ alg: 'none' })}.${b({ sub: u.id, exp: Math.floor(Date.now() / 1000) + 36000, role: 'authenticated' })}.x`;
+      return { access_token: t, token_type: 'bearer', expires_in: 36000, expires_at: Math.floor(Date.now() / 1000) + 36000, refresh_token: 'r',
+        user: { id: u.id, email: u.email, aud: 'authenticated', role: 'authenticated', user_metadata: u.raw_user_meta_data || {}, app_metadata: u.raw_app_meta_data || {} } };
+    };
+    if (url.pathname === '/auth/v1/signup' && req.method === 'POST') {
+      const b = JSON.parse(cuerpo);
+      const { rows: [ya] } = await pool.query('select 1 from auth.users where lower(email)=lower($1)', [b.email]);
+      if (ya) return json(res, 422, { code: 422, error_code: 'user_already_exists', msg: 'User already registered' });
+      try {
+        const { rows: [u] } = await pool.query(`insert into auth.users (email, encrypted_password, raw_user_meta_data, raw_app_meta_data)
+          values (lower($1), extensions.crypt($2, extensions.gen_salt('bf')), $3, '{"provider":"email","providers":["email"]}') returning *`, [b.email, b.password, b.data || {}]);
+        return json(res, 200, sesionDe(u));
+      } catch (e) { return json(res, 500, { code: 500, error_code: 'unexpected_failure', msg: 'Database error saving new user' }); }
+    }
+    if (url.pathname === '/auth/v1/token' && url.searchParams.get('grant_type') === 'password') {
+      const b = JSON.parse(cuerpo);
+      const { rows: [u] } = await pool.query('select * from auth.users where lower(email)=lower($1) and encrypted_password = extensions.crypt($2, encrypted_password)', [b.email, b.password]);
+      if (!u) return json(res, 400, { code: 400, error_code: 'invalid_credentials', msg: 'Invalid login credentials' });
+      return json(res, 200, sesionDe(u));
+    }
+    if (url.pathname.startsWith('/auth/v1/user') && req.method === 'PUT') {
+      const token = (req.headers.authorization || '').replace(/^Bearer /, '');
+      const sub = JSON.parse(Buffer.from(token.split('.')[1], 'base64url')).sub;
+      const b = JSON.parse(cuerpo);
+      const { rows: [u] } = await pool.query(`update auth.users set encrypted_password = extensions.crypt($2, extensions.gen_salt('bf')) where id=$1 returning *`, [sub, b.password]);
+      return json(res, 200, sesionDe(u).user);
+    }
     if (url.pathname.startsWith('/auth/v1/user')) {
       const token = (req.headers.authorization || '').replace(/^Bearer /, '');
       const sub = JSON.parse(Buffer.from(token.split('.')[1], 'base64url')).sub;

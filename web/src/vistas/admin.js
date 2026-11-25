@@ -34,7 +34,16 @@ async function usuarios() {
       h('div', { class: 'fila' }, h('label', { class: 'fila-campo' }, h('span', {}, 'Rol'), rol), h('label', { class: 'fila-campo' }, h('span', {}, 'Sede'), sede)),
       h('label', { class: 'check' }, activo, 'Acceso habilitado'),
       h('p', { class: 'nota' }, 'Dependiente: opera las bodegas de su sede. Consulta: ve existencias y dónde están (médicos, Contact Center). Administrador: todo.')), {
-      acciones: [{ texto: 'Guardar', clase: 'btn-primario', accion: async () => {
+      acciones: [
+        ...(!nuevo && u.id && u.id !== estado.perfil.id ? [
+          { texto: '🗑 Eliminar cuenta', clase: 'btn-peligro', accion: async () => {
+            const m = await pedirMotivo('Eliminar la cuenta de ' + u.email, 'Úselo si alguien creó la cuenta haciéndose pasar por esta persona. Se borra solo la cuenta (correo y contraseña); el perfil y su historial se conservan, y la persona podrá crearla de nuevo.', 'Eliminar cuenta');
+            if (!m) return false;
+            await rpc('admin_eliminar_cuenta', { p_email: u.email, p_motivo: m });
+            toast('Cuenta eliminada'); caja.replaceWith(await usuarios());
+          } },
+          { texto: '🔑 Contraseña temporal', clase: 'btn-sec', accion: async () => { await claveTemporal(u); return false; } }] : []),
+        { texto: 'Guardar', clase: 'btn-primario', accion: async () => {
         if (rol.value === 'dependiente' && !sede.value) { toast('Un dependiente debe tener sede', 'error'); return false; }
         const datos = { nombre: nombre.value.trim(), rol: rol.value, sede_id: sede.value ? Number(sede.value) : null, activo: activo.checked, ...(activo.checked ? { estado_solicitud: 'aprobada' } : {}) };
         if (nuevo) {
@@ -97,17 +106,31 @@ async function usuarios() {
     ], solicitudes, { alClic: resolverSolicitud })) : null;
 
   caja.replaceChildren(zonaSolicitudes, h('div', { class: 'filtros' }, buscar, h('button', { class: 'btn btn-primario', style: { flex: '0 0 auto' }, onclick: () => editar({}, true) }, '➕ Nuevo usuario')),
-    h('p', { class: 'nota' }, 'Cada persona entra con su cuenta Microsoft institucional y envía su solicitud (cargo, sede y acceso que necesita). Usted aprueba asignando el rol y la sede, o la rechaza. Clic en un usuario para cambiar su rol, sede o quitarle el acceso.'), zona);
+    h('p', { class: 'nota' }, 'Cada persona crea su cuenta con su correo @inabve.gob.sv y envía su solicitud (cargo, sede y acceso que necesita). Como el correo no se verifica, confirme con la persona antes de aprobar. Usted aprueba asignando el rol y la sede, o la rechaza. Clic en un usuario para cambiar su rol, sede o quitarle el acceso.'), zona);
   return caja;
 }
 
 const kv = (k, v) => h('div', {}, h('div', { class: 'kpi-titulo' }, k), h('div', {}, v));
-function pedirMotivo() {
+function claveTemporal(u) {
+  const sugerida = 'Inabve-' + Array.from(crypto.getRandomValues(new Uint8Array(4)), b => (b % 10)).join('') + String.fromCharCode(65 + crypto.getRandomValues(new Uint8Array(1))[0] % 26);
+  const c = h('input', { class: 'campo', value: sugerida });
+  return new Promise(res => modal('Contraseña temporal · ' + u.email, h('div', {},
+    h('label', { class: 'fila-campo' }, h('span', {}, 'Contraseña temporal (mínimo 8 caracteres)'), c),
+    h('p', { class: 'nota' }, 'Désela a la persona en privado (en persona o por teléfono). Al entrar, el sistema le pedirá crear una nueva.')), {
+    acciones: [{ texto: 'Cancelar', clase: 'btn-sec', accion: () => res(false) },
+      { texto: 'Asignar', clase: 'btn-primario', accion: async () => {
+        await rpc('admin_restablecer_clave', { p_email: u.email, p_clave: c.value });
+        toast('Contraseña temporal asignada'); res(true);
+      } }],
+    alCerrar: () => res(false) }));
+}
+
+function pedirMotivo(titulo = 'Motivo del rechazo', ayuda = 'La persona verá este motivo al entrar', boton = 'Rechazar') {
   return new Promise(res => {
     const t = h('textarea', { class: 'campo', rows: 3 });
-    modal('Motivo del rechazo', h('label', { class: 'fila-campo' }, h('span', {}, 'La persona verá este motivo al entrar'), t), {
+    modal(titulo, h('label', { class: 'fila-campo' }, h('span', {}, ayuda), t), {
       acciones: [{ texto: 'Cancelar', clase: 'btn-sec', accion: () => res(null) },
-        { texto: 'Rechazar', clase: 'btn-peligro', accion: () => { if (t.value.trim().length < 5) { toast('Escriba el motivo', 'error'); return false; } res(t.value.trim()); } }],
+        { texto: boton, clase: 'btn-peligro', accion: () => { if (t.value.trim().length < 5) { toast('Escriba el motivo', 'error'); return false; } res(t.value.trim()); } }],
       alCerrar: () => res(null) });
   });
 }

@@ -1,11 +1,12 @@
 \set ON_ERROR_STOP 0
 \pset pager off
 -- usuarios de prueba (simulan el primer inicio de sesión con Microsoft)
-insert into auth.users(id,email) values
- ('00000000-0000-0000-0000-000000000001','harold.alas@inabve.gob.sv'),
- ('00000000-0000-0000-0000-000000000002','iris.ramirez@inabve.gob.sv'),
- ('00000000-0000-0000-0000-000000000003','jose.avila@inabve.gob.sv'),
- ('00000000-0000-0000-0000-000000000004','nuevo.usuario@inabve.gob.sv');
+insert into auth.users(id,email,raw_app_meta_data) values
+ ('00000000-0000-0000-0000-000000000001','harold.alas@inabve.gob.sv','{"provider":"azure"}'),
+ ('00000000-0000-0000-0000-000000000002','iris.ramirez@inabve.gob.sv','{"provider":"azure"}'),
+ ('00000000-0000-0000-0000-000000000003','jose.avila@inabve.gob.sv','{"provider":"azure"}'),
+ ('00000000-0000-0000-0000-000000000004','nuevo.usuario@inabve.gob.sv','{"provider":"azure"}')
+on conflict (id) do nothing;
 -- usuarios de prueba aprobados (en producción solo Oscar Rivas y Harold Alas vienen habilitados)
 update perfiles set activo = true, estado_solicitud = 'aprobada', rol = 'dependiente', sede_id = 3 where email = 'iris.ramirez@inabve.gob.sv';
 update perfiles set activo = true, estado_solicitud = 'aprobada', rol = 'consulta' where email = 'jose.avila@inabve.gob.sv';
