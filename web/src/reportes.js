@@ -1,6 +1,6 @@
 // SIGAM-INABVE · reportes de traslado: PDF por categoría y Excel para TICS (hoja MIGRAR)
 import { descargar } from './ui.js';
-import { sb, q, todas } from './api.js';
+import { sb, q, todas, estado } from './api.js';
 
 const SISTEMA = 'SIGAM-INABVE';
 const SISTEMA_LARGO = 'Sistema Integrado de Gestión de Abastecimiento Médico';
@@ -144,7 +144,7 @@ export async function excelSalidasDia(bodega, fechaISO) {
   const ws = wb.addWorksheet('Salidas', {
     pageSetup: { paperSize: 1, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0, horizontalCentered: true,
                  margins: { left: 0.25, right: 0.25, top: 0.35, bottom: 0.4, header: 0.15, footer: 0.2 } },
-    headerFooter: { oddFooter: `&L&7${bodega.nombre} · ${fechaISO.split('-').reverse().join('/')}&R&7Página &P de &N` },
+    headerFooter: { oddFooter: `&L&7${bodega.nombre} · &B${fechaISO.split('-').reverse().join('/')}&B&C&7Responsable: ${(estado.perfil?.nombre || '').replace(/&/g, '&&')}&R&7Página &P de &N` },
   });
   const F = { name: 'Calibri', size: 8 };
   const cols = [['N°', 3.5], ['Hora', 5], ['Despacho', 11], ['DUI / recibe', 10.5], ['Exped.', 7], ['Código', 12.5], ['Producto', 34], ['Lote', 10.5], ['Vence', 7.5], ['Cant.', 5], ['P. unit.', 7.5], ['Subtotal', 8.5]];
@@ -157,12 +157,32 @@ export async function excelSalidasDia(bodega, fechaISO) {
   const montoTotal = Math.round(lineas.reduce((a, x) => a + Math.round(Number(x.d.cantidad) * precio(x.d) * 100), 0)) / 100;
   const personas = new Set(salidas.map(s => s.dui || s.expediente || s.persona_recibe).filter(Boolean)).size;
 
-  ws.mergeCells('A1:L1'); Object.assign(ws.getCell('A1'), { value: `INABVE · SIGAM — Reporte diario de salidas · ${bodega.nombre}`, font: { ...F, size: 11, bold: true, color: { argb: 'FF233152' } } });
-  ws.mergeCells('A2:L2'); Object.assign(ws.getCell('A2'), { value: `Fecha: ${fdia}   ·   ${salidas.length} despachos   ·   ${personas} personas   ·   ${lineas.length} líneas   ·   ${unidades.toLocaleString('es-SV')} unidades   ·   Monto: $${montoTotal.toLocaleString('es-SV', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, font: { ...F, size: 9 } });
-  const enc = ws.getRow(3); enc.values = cols.map(c => c[0]); enc.height = 13;
-  enc.eachCell(c => { c.font = { ...F, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF233152' } }; c.alignment = { vertical: 'middle', horizontal: 'center' }; });
-  ws.pageSetup.printTitlesRow = '3:3';
-  ws.views = [{ state: 'frozen', ySplit: 3 }];
+  const responsable = estado.perfil?.nombre || estado.perfil?.email || '';
+  const ahora = new Date();
+  const generado = `${ahora.toLocaleDateString('es-SV', { day: '2-digit', month: '2-digit', year: 'numeric' })} ${ahora.toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', hour12: false })}`;
+  const diaSemana = new Date(fechaISO + 'T12:00:00').toLocaleDateString('es-SV', { weekday: 'long' });
+  const AZUL = 'FF233152', DORADO = 'FFB08A3E';
+  ws.mergeCells('A1:I1'); Object.assign(ws.getCell('A1'), { value: 'INABVE · SIGAM — Reporte diario de salidas', font: { ...F, size: 12, bold: true, color: { argb: AZUL } } });
+  ws.mergeCells('A2:I2'); Object.assign(ws.getCell('A2'), { value: bodega.nombre, font: { ...F, size: 10, bold: true } });
+  ws.mergeCells('A3:I3'); Object.assign(ws.getCell('A3'), { value: `${salidas.length} despachos   ·   ${personas} personas   ·   ${lineas.length} líneas   ·   ${unidades.toLocaleString('es-SV')} unidades   ·   Monto: $${montoTotal.toLocaleString('es-SV', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`, font: { ...F, size: 9 } });
+  ws.mergeCells('A4:I4'); Object.assign(ws.getCell('A4'), { value: { richText: [
+    { text: 'Responsable del reporte: ', font: { ...F, size: 9 } }, { text: responsable, font: { ...F, size: 9, bold: true } },
+    { text: `   ·   generado el ${generado}`, font: { ...F, size: 8, color: { argb: 'FF5B6478' } } }] } });
+  // recuadro de la fecha, bien visible a la derecha del encabezado
+  ws.mergeCells('J1:L4');
+  const cf = ws.getCell('J1');
+  cf.value = { richText: [
+    { text: 'FECHA\n', font: { name: 'Calibri', size: 8, bold: true, color: { argb: 'FFE9D9B4' } } },
+    { text: fdia + '\n', font: { name: 'Calibri', size: 16, bold: true, color: { argb: 'FFFFFFFF' } } },
+    { text: diaSemana, font: { name: 'Calibri', size: 9, color: { argb: 'FFFFFFFF' } } }] };
+  cf.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
+  cf.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: AZUL } };
+  cf.border = { top: { style: 'medium', color: { argb: DORADO } }, left: { style: 'medium', color: { argb: DORADO } }, bottom: { style: 'medium', color: { argb: DORADO } }, right: { style: 'medium', color: { argb: DORADO } } };
+  [1, 2, 3, 4].forEach(i => { ws.getRow(i).height = 15; });
+  const enc = ws.getRow(6); enc.values = cols.map(c => c[0]); enc.height = 13;
+  enc.eachCell(c => { c.font = { ...F, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: AZUL } }; c.alignment = { vertical: 'middle', horizontal: 'center' }; });
+  ws.pageSetup.printTitlesRow = '6:6';
+  ws.views = [{ state: 'frozen', ySplit: 6 }];
 
   const borde = { bottom: { style: 'hair', color: { argb: 'FFBFC6D4' } } };
   let n = 0, gris = false;
@@ -198,14 +218,15 @@ export async function excelSalidasDia(bodega, fechaISO) {
   t.getCell(10).numFmt = '#,##0.##'; t.getCell(12).numFmt = DIN;
   t.getCell(7).alignment = { horizontal: 'right' };
   ws.addRow([]);
-  const firma = ws.addRow(['', '', 'Despachó (nombre y firma): ______________________________', '', '', '', '', 'Revisó: ______________________']);
-  firma.eachCell(c => { c.font = F; });
+  ws.addRow([]);
+  const firma = ws.addRow(['', '', `Responsable: ${responsable}`, '', '', '', 'Firma: ______________________', 'Revisó: ______________________']);
+  firma.eachCell(c => { c.font = { ...F, size: 9 }; }); firma.getCell(3).font = { ...F, size: 9, bold: true };
 
   // resumen por producto (segunda hoja)
   const rs = wb.addWorksheet('Resumen por producto', { pageSetup: { paperSize: 1, orientation: 'portrait', fitToPage: true, fitToWidth: 1, fitToHeight: 0,
     margins: { left: 0.3, right: 0.3, top: 0.4, bottom: 0.4, header: 0.15, footer: 0.2 } } });
   rs.columns = [{ width: 14 }, { width: 46 }, { width: 9 }, { width: 9 }, { width: 11 }];
-  rs.mergeCells('A1:E1'); Object.assign(rs.getCell('A1'), { value: `Resumen por producto · ${bodega.nombre} · ${fdia}`, font: { ...F, size: 11, bold: true, color: { argb: 'FF233152' } } });
+  rs.mergeCells('A1:E1'); Object.assign(rs.getCell('A1'), { value: `Resumen por producto · ${bodega.nombre} · ${fdia} · Responsable: ${responsable}`, font: { ...F, size: 11, bold: true, color: { argb: 'FF233152' } } });
   const er = rs.getRow(2); er.values = ['Código', 'Producto', 'Despachos', 'Unidades', 'Monto'];
   er.eachCell(c => { c.font = { ...F, bold: true, color: { argb: 'FFFFFFFF' } }; c.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF233152' } }; });
   const res = new Map();
