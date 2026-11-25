@@ -8,11 +8,13 @@ import { sb, q, rpc, quitarTildes } from '../api.js';
 import { leerArchivo } from './liquidacion.js';
 
 const norm = s => quitarTildes(String(s ?? '')).toUpperCase().replace(/[^A-Z0-9]+/g, ' ').trim();
+// "Y CÍA", "Y C.A.", "Y CIA." son la misma razón social
+const normNombre = s => norm(s).replace(/ Y (CIA|C A|CA)\b/g, ' Y CIA');
 
 // "Contrato_CEFAFA_-_MEDICAMENTOS_-_JUAN_PABLO_II-1_4.xlsx" → contrato "CEFAFA - MEDICAMENTOS - JUAN PABLO II"
 export function detectarContrato(nombreArchivo, contratos) {
-  let n = norm(nombreArchivo.replace(/\.[a-z]+$/i, '').replace(/^contrato[_\s-]*/i, ''));
-  const cands = contratos.map(c => ({ c, k: norm(c.nombre_sivet) })).sort((a, b) => b.k.length - a.k.length);
+  let n = normNombre(nombreArchivo.replace(/\.[a-z]+$/i, '').replace(/^contrato[_\s-]*/i, ''));
+  const cands = contratos.map(c => ({ c, k: normNombre(c.nombre_sivet) })).sort((a, b) => b.k.length - a.k.length);
   for (let i = 0; i < 4; i++) {
     const hit = cands.find(x => n === x.k) || cands.find(x => n.startsWith(x.k + ' ') || n.startsWith(x.k));
     if (hit) return hit.c.id;
@@ -165,8 +167,8 @@ async function panelArchivo(caja, file, contratos) {
         const res = await rpc('conciliar_sivet', { p_contrato: Number(sel.value), p_filas: filas, p_aplicar: true, p_archivo: file.name });
         ctl.aplicado = true; ctl.listo = false;
         if (preguntar !== false) toast(`Conciliación aplicada: +${num(res.aumenta)} / −${num(res.disminuye)}${res.lotes_sin_vencimiento ? ` · ${res.lotes_sin_vencimiento} lote(s) nuevos sin vencimiento` : ''}`, 'ok', 10000);
-        caja.replaceChildren(h('h3', {}, `✔ ${file.name}`), h('p', {}, `${res.contrato} conciliado. Antes ${num(res.actual_total)} · ahora ${num(res.final_total)} unidades en Despacho/Almacén.`),
-          res.lotes_sin_vencimiento ? h('p', { class: 'aviso aviso-warn' }, `${res.lotes_sin_vencimiento} lote(s) se crearon sin número de lote ni vencimiento (la factura no estaba en SIGAM). Aparecen como "SIVET-<factura>".`) : null);
+        caja.replaceChildren(...[h('h3', {}, `✔ ${file.name}`), h('p', {}, `${res.contrato} conciliado. Antes ${num(res.actual_total)} · ahora ${num(res.final_total)} unidades en Despacho/Almacén.`),
+          res.lotes_sin_vencimiento ? h('p', { class: 'aviso aviso-warn' }, `${res.lotes_sin_vencimiento} lote(s) se crearon sin número de lote ni vencimiento (la factura no estaba en SIGAM). Aparecen como "SIVET-<factura>".`) : null].filter(Boolean));
         return true;
       } catch (e) { error(e); btnAplicar.disabled = false; return false; }
     }
