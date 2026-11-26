@@ -24,6 +24,7 @@ function periodos() {
   const ini = q1 ? new Date(y, m, 1) : new Date(y, m, 16), fin = q1 ? new Date(y, m, 15) : new Date(y, m + 1, 0);
   const pIni = q1 ? new Date(y, m - 1, 16) : new Date(y, m, 1), pFin = q1 ? new Date(y, m, 0) : new Date(y, m, 15);
   return {
+    h: [iso(hoy), iso(hoy), 'Hoy'], y: [iso(new Date(y, m, d - 1)), iso(new Date(y, m, d - 1)), 'Ayer'],
     q: [iso(ini), iso(fin), 'Quincena actual'], qa: [iso(pIni), iso(pFin), 'Quincena anterior'],
     m: [iso(new Date(y, m, 1)), iso(new Date(y, m + 1, 0)), 'Este mes'], ma: [iso(new Date(y, m - 1, 1)), iso(new Date(y, m, 0)), 'Mes anterior'],
     a: [iso(new Date(y, 0, 1)), iso(new Date(y, 11, 31)), `Año ${y}`],
@@ -63,15 +64,34 @@ export default async function (params) {
         h('label', { class: 'fila-campo' }, h('span', {}, 'Sede'), sel('sede', [['', 'Todas'], ...estado.sedes.map(s => [s.id, s.nombre])])),
         h('label', { class: 'fila-campo' }, h('span', {}, 'Proveedor'), sel('proveedor', [['', 'Todos'], ...proveedores.map(p => [p.id, p.nombre])])),
         tipoFijo ? null : h('label', { class: 'fila-campo' }, h('span', {}, 'Tipo'), sel('tipo', [['', 'Medicamentos e insumos'], ['medicamento', 'Medicamentos'], ['insumo', 'Insumos médicos']]))),
-      h('p', { class: 'nota' }, `Del ${f.desde.split('-').reverse().join('/')} al ${f.hasta.split('-').reverse().join('/')} · despachos confirmados en SIGAM (incluye el histórico migrado de SIFAR desde julio 2026) · montos a precio de compra del lote entregado.`));
+      h('p', { class: 'nota' }, (f.periodo === 'h' ? `Hoy ${f.desde.split('-').reverse().join('/')} · se actualiza cada 2 minutos (última: ${new Date().toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', hour12: false })})` : `Del ${f.desde.split('-').reverse().join('/')} al ${f.hasta.split('-').reverse().join('/')}`) + ` · despachos confirmados en SIGAM (incluye el histórico migrado de SIFAR desde julio 2026) · montos a precio de compra del lote entregado.`));
   };
 
   await pintar();
   raiz.append(filtros, zona);
+  // "Hoy": se actualiza solo cada 2 minutos mientras la pantalla está abierta y visible
+  const reloj = setInterval(() => {
+    if (!raiz.isConnected) return clearInterval(reloj);
+    if (f.periodo === 'h' && !document.hidden) pintar();
+  }, 120_000);
   return raiz;
 }
 
 // ----------------------------------------------------------------------------- piezas
+// un solo día: la evolución se muestra por hora; si no, por mes
+const unDia = f => f.desde === f.hasta;
+const serie = (d, f) => {
+  if (!unDia(f)) return d.mensual;
+  if (!d.por_hora.length) return [];
+  const hs = d.por_hora.map(r => r.hora), out = [];   // horas seguidas, con cero donde no hubo movimiento
+  for (let x = Math.min(7, ...hs); x <= Math.max(16, ...hs); x++) {
+    const r = d.por_hora.find(y => y.hora === x) || { hora: x, despachos: 0, unidades: 0, monto: 0, personas: 0 };
+    out.push({ ...r, et: `${String(x).padStart(2, '0')}:00` });
+  }
+  return out;
+};
+const tituloSerie = (f, t) => unDia(f) ? `${t} por hora` : `${t} mensual`;
+
 const kpi = (t, v, s) => h('div', { class: 'kpi' }, h('div', { class: 'kpi-titulo' }, t), h('div', { class: 'kpi-valor' }, v), s ? h('div', { class: 'kpi-sub' }, s) : null);
 const tarjeta = (titulo, ...hijos) => h('section', { class: 'tarjeta' }, h('h2', {}, titulo), ...hijos);
 const dos = (...hijos) => h('div', { class: 'rejilla rejilla-graficos' }, ...hijos);
@@ -173,7 +193,9 @@ function quincenal(d, f) {
           kpi('Existencia valorada', dinero(d.existencias.valor), `${ent(d.existencias.productos)} productos con existencia`),
           kpi('Traslados del período', ent(d.traslados.enviados), `${ent(d.traslados.recibidos)} ya recibidos`)),
         h('h3', { style: { marginTop: '14px' } }, 'Monto por proveedor'), barras(d.por_proveedor.slice(0, 8), 'monto', true))),
-    tarjeta('Monto por quincena', lineas(d.quincenal.map(r => ({ ...r, et: `${etMes(r.mes)} ${r.q === 1 ? '1ª' : '2ª'}` })), [{ k: 'monto', t: 'Monto', c: COLORES[0], fmt: dinero }], 'Monto por quincena')),
+    unDia(f)
+      ? tarjeta('Movimiento del día por hora', lineas(serie(d, f), [{ k: 'despachos', t: 'Despachos', c: COLORES[0], fmt: ent }, { k: 'monto', t: 'Monto', c: COLORES[1], fmt: dinero }], 'Movimiento del día por hora'))
+      : tarjeta('Monto por quincena', lineas(d.quincenal.map(r => ({ ...r, et: `${etMes(r.mes)} ${r.q === 1 ? '1ª' : '2ª'}` })), [{ k: 'monto', t: 'Monto', c: COLORES[0], fmt: dinero }], 'Monto por quincena')),
     h('p', { class: 'nota' }, 'El reparto por población (FAES, excombatientes, personas con discapacidad) y por sexo necesita esos datos en el expediente; SIGAM aún no los registra.'));
 }
 
@@ -190,7 +212,7 @@ function medicamentos(d, f) {
       tarjeta('10 medicamentos más entregados', barras(d.top_unidades, 'unidades', false, ent)),
       tarjeta('Personas por sede', barras(d.por_sede, 'personas', true, ent))),
     dos(
-      tarjeta('Evolución mensual', lineas(d.mensual, [{ k: 'unidades', t: 'Unidades entregadas', c: COLORES[0], fmt: ent }, { k: 'personas', t: 'Personas', c: COLORES[1], fmt: ent }], 'Evolución mensual de medicamentos entregados')),
+      tarjeta(unDia(f) ? 'Entregas por hora' : 'Evolución mensual', lineas(serie(d, f), [{ k: 'unidades', t: 'Unidades entregadas', c: COLORES[0], fmt: ent }, { k: 'personas', t: 'Personas', c: COLORES[1], fmt: ent }], 'Evolución de medicamentos entregados')),
       h('section', { class: 'tarjeta' }, h('div', { class: 'botones' }, h('h2', {}, 'Expedientes con mayor consumo'), h('span', { class: 'espacio' }),
         btnExcel(nombreArchivo('medicamentos', f), [{ titulo: 'Top medicamentos', cols: colsProd, filas: d.top_unidades }, { titulo: 'Mensual', cols: [{ t: 'Mes', k: 'mes' }, { t: 'Unidades', k: 'unidades' }, { t: 'Personas', k: 'personas' }, { t: 'Monto', k: 'monto' }], filas: d.mensual }])),
         tabla(colsPers, d.top_personas, { vacio: 'Sin despachos a beneficiarios' }),
@@ -210,7 +232,7 @@ function presupuesto(d, f) {
       tarjeta('10 medicamentos con mayor impacto', barras(d.top_monto)),
       tarjeta('Costo y cantidad entregada', dispersion(d.dispersion, 'Relación entre costo y cantidad entregada'))),
     dos(
-      tarjeta('Evolución mensual del costo', lineas(d.mensual, [{ k: 'monto', t: 'Costo', c: COLORES[0], fmt: dinero }], 'Evolución mensual del costo de medicamentos')),
+      tarjeta(tituloSerie(f, 'Costo'), lineas(serie(d, f), [{ k: 'monto', t: 'Costo', c: COLORES[0], fmt: dinero }], 'Evolución del costo de medicamentos')),
       h('section', { class: 'tarjeta' }, h('div', { class: 'botones' }, h('h2', {}, 'Expedientes con mayor costo'), h('span', { class: 'espacio' }),
         btnExcel(nombreArchivo('presupuesto_medicamentos', f), [{ titulo: 'Mayor costo', cols: colsProd, filas: d.top_monto }, { titulo: 'Por familia', cols: [{ t: 'Familia', k: 'clave' }, { t: 'Unidades', k: 'unidades' }, { t: 'Monto', k: 'monto' }], filas: d.por_familia }])),
         tabla(colsPers, d.top_personas, { vacio: 'Sin despachos a beneficiarios' }))),
@@ -230,7 +252,7 @@ function insumos(d, f) {
       tarjeta('10 insumos más entregados', barras(d.top_unidades, 'unidades', false, ent)),
       tarjeta('10 insumos con mayor impacto', barras(d.top_monto, 'monto', true))),
     dos(
-      tarjeta('Evolución mensual', lineas(d.mensual, [{ k: 'unidades', t: 'Unidades', c: COLORES[0], fmt: ent }, { k: 'monto', t: 'Costo', c: COLORES[1], fmt: dinero }], 'Evolución mensual de insumos')),
+      tarjeta(unDia(f) ? 'Insumos por hora' : 'Evolución mensual', lineas(serie(d, f), [{ k: 'unidades', t: 'Unidades', c: COLORES[0], fmt: ent }, { k: 'monto', t: 'Costo', c: COLORES[1], fmt: dinero }], 'Evolución de insumos')),
       h('section', { class: 'tarjeta' }, h('div', { class: 'botones' }, h('h2', {}, 'Distribución del costo por sede'), h('span', { class: 'espacio' }),
         btnExcel(nombreArchivo('presupuesto_insumos', f), [{ titulo: 'Más entregados', cols: colsProd, filas: d.top_unidades }, { titulo: 'Mayor costo', cols: colsProd, filas: d.top_monto }])),
         dona(d.por_sede, 'monto', 'Distribución del costo de insumos por sede'))));
