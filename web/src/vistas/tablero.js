@@ -16,6 +16,7 @@ const PESTANAS = [
   ['presupuesto', 'Impacto presupuestario · medicamentos', 'medicamento'],
   ['insumos', 'Impacto presupuestario · insumos', 'insumo'],
   ['solicitudes', 'Solicitudes', 'solicitudes'],
+  ['llamadas', 'Llamadas', 'llamadas'],
 ];
 
 // períodos: quincena actual o anterior, mes, año o rango libre
@@ -43,6 +44,11 @@ export default async function (params) {
     if (f.periodo !== 'r') [f.desde, f.hasta] = P[f.periodo];
     zona.replaceChildren(h('p', { class: 'nota' }, 'Calculando…'));
     try {
+      if (tipoFijo === 'llamadas') {
+        const d = await rpc('tablero_llamadas', { p_desde: f.desde, p_hasta: f.hasta, p_sede: f.sede ? Number(f.sede) : null });
+        zona.replaceChildren(llamadas(d, f));
+        return pintarFiltros();
+      }
       if (tipoFijo === 'solicitudes') {
         const d = await rpc('tablero_solicitudes', { p_desde: f.desde, p_hasta: f.hasta, p_sede: f.sede ? Number(f.sede) : null });
         zona.replaceChildren(solicitudes(d, f));
@@ -65,13 +71,15 @@ export default async function (params) {
     filtros.replaceChildren(
       h('div', { class: 'pestanas' }, PESTANAS.map(([k, t]) => h('button', { class: f.pestana === k ? 'activo' : '', onclick: () => {
         if (k === 'solicitudes' && ['h', 'y', 'q', 'qa'].includes(f.periodo)) f.periodo = 'a';   // solicitudes: por defecto el año
+        if (k === 'llamadas' && ['h', 'y', 'a'].includes(f.periodo)) f.periodo = 'm';             // llamadas: por defecto el mes
         f.pestana = k; pintar(); } }, t))),
       h('div', { class: 'filtros' },
         h('label', { class: 'fila-campo' }, h('span', {}, 'Período'), sel('periodo', [...Object.entries(P).map(([k, v]) => [k, v[2]]), ['r', 'Rango de fechas…']])),
         ...fechas,
         h('label', { class: 'fila-campo' }, h('span', {}, 'Sede'), sel('sede', [['', 'Todas'], ...estado.sedes.map(s => [s.id, s.nombre])])),
-        tipoFijo === 'solicitudes' ? null : h('label', { class: 'fila-campo' }, h('span', {}, 'Proveedor'), sel('proveedor', [['', 'Todos'], ...proveedores.map(p => [p.id, p.nombre])])),
+        ['solicitudes', 'llamadas'].includes(tipoFijo) ? null : h('label', { class: 'fila-campo' }, h('span', {}, 'Proveedor'), sel('proveedor', [['', 'Todos'], ...proveedores.map(p => [p.id, p.nombre])])),
         tipoFijo ? null : h('label', { class: 'fila-campo' }, h('span', {}, 'Tipo'), sel('tipo', [['', 'Medicamentos e insumos'], ['medicamento', 'Medicamentos'], ['insumo', 'Insumos médicos']]))),
+      tipoFijo === 'llamadas' ? h('p', { class: 'nota' }, `Llamadas registradas en Seguimiento telefónico del ${f.desde.split('-').reverse().join('/')} al ${f.hasta.split('-').reverse().join('/')}. "Para hoy" muestra lo pendiente ahora.`) :
       tipoFijo === 'solicitudes' ? h('p', { class: 'nota' }, `Solicitudes registradas del ${f.desde.split('-').reverse().join('/')} al ${f.hasta.split('-').reverse().join('/')}. "Abiertas", "Por estado" y "Antigüedad" muestran lo pendiente hoy.`) :
       h('p', { class: 'nota' }, (f.periodo === 'h' ? `Hoy ${f.desde.split('-').reverse().join('/')} · se actualiza cada 2 minutos (última: ${new Date().toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', hour12: false })})` : `Del ${f.desde.split('-').reverse().join('/')} al ${f.hasta.split('-').reverse().join('/')}`) + ` · despachos confirmados en SIGAM (incluye el histórico migrado de SIFAR desde julio 2026) · montos a precio de compra del lote entregado.`));
   };
@@ -136,7 +144,8 @@ function lineas(fs, series, etiqueta) {
     const ex = si === 0 ? L - 6 : W - R + 6, an = si === 0 ? 'end' : 'start';
     out += `<text x="${ex}" y="${T + 4}" font-size="13" fill="${s.c}" text-anchor="${an}">${esc(corto(mx))}</text><text x="${ex}" y="${H - B}" font-size="13" fill="${s.c}" text-anchor="${an}">0</text>`;
   });
-  fs.forEach((r, i) => { out += `<text x="${x(i)}" y="${H - 12}" font-size="13" fill="#5b6478" text-anchor="middle">${esc(r.et || etMes(r.mes))}</text>`; });
+  const paso = Math.ceil(fs.length / 12);
+  fs.forEach((r, i) => { if (i % paso) return; out += `<text x="${x(i)}" y="${H - 12}" font-size="13" fill="#5b6478" text-anchor="middle">${esc(r.et || etMes(r.mes))}</text>`; });
   out += `<line x1="${L}" x2="${W - R}" y1="${H - B}" y2="${H - B}" stroke="#d6dbe6"/>`;
   return h('div', {}, svg(W, H, out, etiqueta),
     h('div', { class: 'leyenda' }, series.map(s => h('span', {}, h('i', { style: { background: s.c } }), s.t))));
@@ -265,6 +274,37 @@ function insumos(d, f) {
       h('section', { class: 'tarjeta' }, h('div', { class: 'botones' }, h('h2', {}, 'Distribución del costo por sede'), h('span', { class: 'espacio' }),
         btnExcel(nombreArchivo('presupuesto_insumos', f), [{ titulo: 'Más entregados', cols: colsProd, filas: d.top_unidades }, { titulo: 'Mayor costo', cols: colsProd, filas: d.top_monto }])),
         dona(d.por_sede, 'monto', 'Distribución del costo de insumos por sede'))));
+}
+
+// ----------------------------------------------------------------------------- 6. llamadas (seguimiento telefónico)
+function llamadas(d, f) {
+  const k = (titulo, v, sub) => h('div', { class: 'kpi' }, h('div', { class: 'kpi-titulo' }, titulo), h('div', { class: 'kpi-valor' }, v), sub ? h('div', { class: 'kpi-sub' }, sub) : null);
+  const pct = (a, b) => b ? Math.round(100 * a / b) + ' %' : '—';
+  const hoy = d.hoy || {};
+  const cols = [{ t: 'Quién llama', k: 'clave' }, { t: 'Llamadas', k: 'n', num: true }, { t: 'Contestaron', k: 'contestaron', num: true }, { t: 'Avisados', k: 'avisados', num: true }];
+  return h('div', {},
+    h('div', { class: 'rejilla' },
+      k('Llamadas en el período', ent(d.llamadas), `${ent(d.beneficiarios)} beneficiarios · ${String(d.intentos_promedio ?? '—').replace('.', ',')} intentos por solicitud`),
+      k('Contestaron', pct(d.contestaron, d.llamadas), `${ent(d.no_contesto)} no contestaron · ${ent(d.equivocado)} número equivocado`),
+      k('Retiran tras el aviso', pct(d.retiraron, d.avisados), `${ent(d.retiraron)} de ${ent(d.avisados)} avisados · ${ent(d.no_retiraron)} no retiraron`),
+      k('Tiempo hasta la primera llamada', d.horas_a_llamar == null ? '—' : d.horas_a_llamar >= 24 ? `${String((d.horas_a_llamar / 24).toFixed(1)).replace('.', ',')} días` : `${String(d.horas_a_llamar).replace('.', ',')} h`, 'desde que el producto está disponible')),
+    h('section', { class: 'tarjeta' }, h('h2', {}, 'Para hoy'),
+      h('div', { class: 'rejilla' },
+        k('Por llamar', ent(hoy.por_llamar), 'disponibles sin avisar o con llamada programada'),
+        k('Esperando que retiren', ent(hoy.esperando), `${ent(hoy.por_vencer)} vencen en 2 días hábiles o menos`),
+        k('No retiraron', ent(hoy.vencidos), 'pasar a Despacho'),
+        k('Sin contacto', ent(hoy.sin_contacto), '3 o más intentos sin respuesta'))),
+    tarjeta('Llamadas por día', lineas(d.serie, [{ k: 'llamadas', t: 'Llamadas', c: COLORES[0], fmt: ent }, { k: 'contestaron', t: 'Contestaron', c: COLORES[1], fmt: ent }], 'Llamadas por día')),
+    dos(
+      tarjeta('Resultado de las llamadas', dona(d.por_resultado, 'n', 'Resultado de las llamadas', ent)),
+      h('section', { class: 'tarjeta' }, h('div', { class: 'botones' }, h('h2', {}, 'Por persona que llama'), h('span', { class: 'espacio' }),
+        btnExcel(`SIGAM_llamadas_${f.desde}_${f.hasta}`, [{ titulo: 'Por persona', cols, filas: d.por_persona },
+          { titulo: 'Por resultado', cols: [{ t: 'Resultado', k: 'clave' }, { t: 'Llamadas', k: 'n' }], filas: d.por_resultado }])),
+        d.por_persona.length ? tabla([{ t: 'Quién llama', k: 'clave' }, { t: 'Llamadas', k: 'n', num: true },
+          { t: 'Contestaron', f: x => `${ent(x.contestaron)} (${pct(x.contestaron, x.n)})`, num: true }, { t: 'Avisados', k: 'avisados', num: true }], d.por_persona) : vacio([]))),
+    dos(
+      tarjeta('Por sede', barras(d.por_sede, 'n', false, ent)),
+      tarjeta('Por tipo de solicitud', barras(d.por_tipo, 'n', true, ent))));
 }
 
 // ----------------------------------------------------------------------------- 5. solicitudes
