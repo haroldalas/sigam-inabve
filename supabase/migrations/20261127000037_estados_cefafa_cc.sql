@@ -467,10 +467,3 @@ do $$ begin
   end if;
 end $$;
 
--- 7 · responsables -----------------------------------------------------------------------------------
-delete from solicitud_responsables where area = 'DSEC' and tipo in ('auditivo', 'lentes', 'cirugia_oftalmica');
-insert into solicitud_responsables (tipo, area, email)
-select x.tipo, 'DSIN', x.email from (values ('lentes', 'veronica.echeverria@inabve.gob.sv'), ('auditivo', 'veronica.echeverria@inabve.gob.sv'),
-                                            ('medicamento', 'jocelyn.flores@inabve.gob.sv'), ('insumo', 'jocelyn.flores@inabve.gob.sv')) x(tipo, email)
- where exists (select 1 from perfiles p where p.email = x.email)
-   and not exists (select 1 from solicitud_responsables r where r.tipo = x.tipo and r.area = 'DSIN' and r.email = x.email);

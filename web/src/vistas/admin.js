@@ -22,6 +22,11 @@ const ROLES = [['administrador', 'Administrador'], ['dependiente', 'Dependiente'
 async function usuarios() {
   const filas = await q(sb.from('perfiles').select('*').order('activo', { ascending: false }).order('nombre'));
   const caja = h('section', { class: 'tarjeta' });
+  // responsables de validar solicitudes (por tipo y área): los administradores los asignan aquí
+  const [TIPOS_SOL, RESP_SOL] = await Promise.all([
+    q(sb.from('solicitud_tipos').select('clave,nombre,icono').order('orden')).catch(() => []),
+    q(sb.from('solicitud_responsables').select('id,tipo,area,email').in('area', ['DSEC', 'DSIN'])).catch(() => []),
+  ]);
   const editar = async (u, nuevo = false) => {
     const email = h('input', { class: 'campo', value: u.email || '', disabled: !nuevo, placeholder: 'usuario@inabve.gob.sv' });
     const nombre = h('input', { class: 'campo', value: u.nombre || '' });
@@ -30,6 +35,15 @@ async function usuarios() {
     const activo = h('input', { type: 'checkbox', checked: nuevo ? true : u.activo });
     const seguimiento = h('input', { type: 'checkbox', checked: !!u.seguimiento });
     const cc = h('input', { type: 'checkbox', checked: !!u.contact_center });
+    // DSEC solo valida medicamento de primera vez e insumo sin evaluación
+    const permisos = TIPOS_SOL.flatMap(t => ['DSIN', 'DSEC'].filter(a => a === 'DSIN' || ['medicamento', 'insumo'].includes(t.clave)).map(a => ({
+      tipo: t.clave, area: a, actual: RESP_SOL.find(r => r.email === u.email && r.tipo === t.clave && r.area === a),
+      caja: h('input', { type: 'checkbox', checked: !!RESP_SOL.find(r => r.email === u.email && r.tipo === t.clave && r.area === a) }) })));
+    const tablaPermisos = h('div', { class: 'permisos-sol' }, h('strong', {}, '✅ Responsable de validar solicitudes'),
+      h('p', { class: 'nota' }, 'Recibe el correo de validación y valida en Solicitudes. DSEC solo aplica a medicamentos de primera vez e insumos sin evaluación.'),
+      h('table', { class: 'tabla tabla-permisos' }, h('thead', {}, h('tr', {}, h('th', {}, 'Tipo'), h('th', {}, 'DSIN'), h('th', {}, 'DSEC'))),
+        h('tbody', {}, TIPOS_SOL.map(t => h('tr', {}, h('td', {}, `${t.icono} ${t.nombre}`),
+          ...['DSIN', 'DSEC'].map(a => h('td', {}, permisos.find(x => x.tipo === t.clave && x.area === a)?.caja || '—')))))));
     modal(nuevo ? 'Nuevo usuario' : u.email, h('div', {},
       h('label', { class: 'fila-campo' }, h('span', {}, 'Correo institucional'), email),
       h('label', { class: 'fila-campo' }, h('span', {}, 'Nombre completo'), nombre),
@@ -37,6 +51,7 @@ async function usuarios() {
       h('label', { class: 'check' }, activo, 'Acceso habilitado'),
       h('label', { class: 'check' }, seguimiento, '📞 Seguimiento telefónico (llama a los beneficiarios de su sede)'),
       h('label', { class: 'check' }, cc, '🎧 Contact Center (sus solicitudes quedan "Captado por CC"; no necesita sede)'),
+      tablaPermisos,
       h('p', { class: 'nota' }, 'Dependiente: opera las bodegas de su sede. Jefatura: ve existencias, kardex y tableros de todas las sedes, sin operar. Consulta: ve existencias y medicamentos nuevos (médicos, Contact Center). Administrador: todo.')), {
       acciones: [
         ...(!nuevo && u.id && u.id !== estado.perfil.id ? [
@@ -62,6 +77,11 @@ async function usuarios() {
           if (!/^[^@]+@inabve\.gob\.sv$/.test(e)) { toast('Debe ser un correo @inabve.gob.sv', 'error'); return false; }
           await q(sb.from('perfiles').insert({ email: e, ...datos }));
         } else await q(sb.from('perfiles').update(datos).eq('email', u.email));
+        const mail = nuevo ? email.value.trim().toLowerCase() : u.email;
+        for (const x of permisos) {
+          if (x.caja.checked && !x.actual) await q(sb.from('solicitud_responsables').insert({ tipo: x.tipo, area: x.area, email: mail }));
+          if (!x.caja.checked && x.actual) await q(sb.from('solicitud_responsables').delete().eq('id', x.actual.id));
+        }
         toast('Usuario guardado'); caja.replaceWith(await usuarios());
       } }] });
   };
@@ -72,7 +92,8 @@ async function usuarios() {
     const t = quitarTildes(buscar.value.toLowerCase());
     zona.replaceChildren(tabla([
       { t: 'Nombre', k: 'nombre' }, { t: 'Correo', k: 'email' }, { t: 'Rol', f: r => ROLES.find(x => x[0] === r.rol)?.[1] },
-      { t: 'Sede', f: r => nomSede(r.sede_id) }, { t: 'Seguimiento', f: r => (r.seguimiento ? '📞' : '') + (r.contact_center ? ' 🎧 CC' : '') }, { t: 'Acceso', f: r => r.activo ? h('span', { class: 'estado st-ok' }, 'Habilitado')
+      { t: 'Sede', f: r => nomSede(r.sede_id) }, { t: 'Seguimiento', f: r => (r.seguimiento ? '📞' : '') + (r.contact_center ? ' 🎧 CC' : '') },
+      { t: 'Valida', f: r => RESP_SOL.filter(x => x.email === r.email).map(x => `${x.area} ${TIPOS_SOL.find(tp => tp.clave === x.tipo)?.icono || ''}`).join(' ') }, { t: 'Acceso', f: r => r.activo ? h('span', { class: 'estado st-ok' }, 'Habilitado')
         : r.estado_solicitud === 'pendiente' ? h('span', { class: 'estado st-warn' }, 'Solicitud por revisar')
         : r.estado_solicitud === 'rechazada' ? h('span', { class: 'estado st-danger' }, 'Rechazada')
         : h('span', { class: 'estado st-muted' }, r.id ? 'Ingresó, sin solicitud' : 'Sin acceso') },
