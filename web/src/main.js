@@ -11,6 +11,7 @@ import { sb, estado, cargarPerfil, cargarCatalogosBase, iniciarSesionMicrosoft, 
 const RUTAS = {
   inicio:       { t: 'Notificaciones',       i: '🔔', roles: ['administrador', 'dependiente'], v: () => import('./vistas/notificaciones.js') },
   novedades:    { t: 'Medicamentos nuevos',  i: '🆕', roles: ['consulta'], v: () => import('./vistas/novedades.js') },
+  solicitudes:  { t: 'Solicitudes',          i: '📨', roles: ['administrador', 'dependiente', 'consulta', 'jefatura'], v: () => import('./vistas/solicitudes.js') },
   existencias:  { t: 'Existencias',          i: '📦', roles: ['administrador', 'dependiente', 'consulta', 'jefatura'], v: () => import('./vistas/existencias.js') },
   despacho:     { t: 'Despacho',             i: '🧾', roles: ['administrador', 'dependiente'], v: () => import('./vistas/despacho.js') },
   recepcion:    { t: 'Recibir traslados',    i: '📥', roles: ['administrador', 'dependiente'], v: () => import('./vistas/recepcion.js') },
@@ -29,7 +30,7 @@ const RUTAS = {
   admin:        { t: 'Administración',       i: '⚙️', roles: ['administrador'], v: () => import('./vistas/admin.js') },
 };
 const GRUPOS = [
-  ['General', ['inicio', 'novedades', 'existencias']],
+  ['General', ['inicio', 'novedades', 'solicitudes', 'existencias']],
   ['Operación', ['despacho', 'recepcion', 'traslados', 'entradas']],
   ['Inventario', ['conteo', 'ajustes', 'devoluciones', 'kardex']],
   ['Coordinación', ['pendientes', 'lotes', 'tablero', 'polizas', 'conciliacion', 'liquidacion', 'admin']],
@@ -226,7 +227,7 @@ async function pantallaPendiente() {
 }
 
 // ----------------------------------------------------------------------------- estructura
-let contenido, insigniaNotif, insigniaCola, insigniaPend, insigniaRecep, insigniaAdmin, solicitudesVistas = -1;
+let contenido, insigniaNotif, insigniaCola, insigniaPend, insigniaRecep, insigniaAdmin, insigniaSol, solicitudesVistas = -1;
 
 function armarEstructura() {
   const p = estado.perfil;
@@ -240,6 +241,7 @@ function armarEstructura() {
         items.map(k => h('a', { href: '#' + k, class: 'menu-item', 'data-ruta': k },
           h('span', { class: 'menu-icono', 'aria-hidden': 'true' }, RUTAS[k].i), h('span', {}, RUTAS[k].t),
           k === 'inicio' || k === 'novedades' ? (insigniaNotif = h('span', { class: 'insignia oculto' })) : null,
+          k === 'solicitudes' ? (insigniaSol = h('span', { class: 'insignia oculto', title: 'Solicitudes por validar o llamadas pendientes' })) : null,
           k === 'pendientes' ? (insigniaPend = h('span', { class: 'insignia oculto' })) : null,
           k === 'admin' ? (insigniaAdmin = h('span', { class: 'insignia oculto', title: 'Solicitudes de acceso por revisar' })) : null,
           k === 'recepcion' ? (insigniaRecep = h('span', { class: 'insignia oculto' })) : null)));
@@ -285,6 +287,7 @@ async function navegar() {
 
 export async function refrescarInsignias() {
   try {
+    rpc('mis_solicitudes_pendientes').then(r => marcar(insigniaSol, (r?.validar || 0) + (r?.llamar || 0))).catch(() => {});
     if (estado.perfil?.rol === 'jefatura') return;
     if (estado.perfil?.rol === 'consulta') {   // consulta: medicamentos nuevos de la última semana
       const nov = await rpc('novedades_medicamentos', { p_dias: 7 });

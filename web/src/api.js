@@ -122,9 +122,19 @@ export async function q(promesa) {
   return count !== undefined && count !== null ? { data, count } : data;
 }
 
+// Envía los correos pendientes (Edge Function enviar-correos). Si falla, pg_cron los envía en ≤5 minutos.
+let _correoTimer;
+export function dispararCorreos() {
+  clearTimeout(_correoTimer);
+  _correoTimer = setTimeout(() => { sb.functions.invoke('enviar-correos', { body: {} }).catch(() => {}); }, 800);
+}
+// operaciones que pueden generar correos (solicitudes, llegada de producto, entregas)
+const GENERAN_CORREO = /solicitud|llamada|registrar_entrada|recibir|registrar_salida|resolver_diferencia/;
+
 export async function rpc(fn, args) {
   const { data, error } = await sb.rpc(fn, args);
   if (error) throw traducirError(error);
+  if (GENERAN_CORREO.test(fn)) dispararCorreos();
   return data;
 }
 
