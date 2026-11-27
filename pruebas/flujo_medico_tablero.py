@@ -6,7 +6,7 @@ def sql(s):
 D='066600033'
 sql(f"delete from solicitud_eventos where solicitud_id in (select id from solicitudes where dui='{D}'); delete from solicitudes where dui='{D}'")
 sql(f"insert into beneficiarios (dui,nombre,telefono,sede_id) values ('{D}','MARTA MEDICO PRUEBA','73330000',3) on conflict do nothing")
-sql(f"insert into solicitudes (numero,tipo,dui,sede_id,area,estado,producto_id,cantidad,creado_por,creado_nombre,modalidad) values ('SOL-MED-'||(select count(*) from solicitudes),'medicamento','{D}',3,'DSIN','aprobada',750,1,'harold.alas@inabve.gob.sv','Harold','pendiente_entrega')")
+sql(f"insert into solicitudes (numero,tipo,dui,sede_id,area,estado,producto_id,cantidad,creado_por,creado_nombre,modalidad) values ('SOL-MED-'||(select count(*) from solicitudes),'medicamento','{D}',3,'DSIN','en_gestion',750,1,'harold.alas@inabve.gob.sv','Harold','pendiente_entrega')")
 lote = sql("select id from lotes where bodega_id=20 and disponible>0 order by id limit 1")
 sql(f"insert into movimientos (tipo,lote_id,producto_id,bodega_id,cantidad,documento) values ('traslado_recepcion',{lote},750,20,1,'traslado')")
 with sync_playwright() as p:

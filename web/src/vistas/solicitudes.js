@@ -15,10 +15,9 @@ const RESULTADOS = [
   ['ya_recibio', '✔ Ya lo recibió', 'btn-sec'], ['ya_no_necesita', '✖ Ya no lo necesita', 'btn-sec'], ['numero_equivocado', '☎ Número equivocado', 'btn-sec'],
 ];
 const AREA_TXT = { DSEC: 'DSEC · Seguimiento y Control en Salud', DSIN: 'DSIN · Programas de Salud Integral' };
-const CLASE_ESTADO = { registrada: 'st-warn', contactado: 'st-info', evaluado: 'st-info', aprobada: 'st-info', en_gestion: 'st-info',
-  sin_disponibilidad: 'st-danger', lista: 'st-ok', avisado: 'st-ok', por_pasar: 'st-warn', en_despacho: 'st-ok', retiro_vencido: 'st-danger', no_retirado: 'st-muted', programada: 'st-info', entregada: 'st-ok', operado: 'st-ok',
-  no_procede: 'st-muted', cancelada: 'st-muted' };
-const chipEstado = s => h('span', { class: 'estado ' + (CLASE_ESTADO[s.estado] || '') }, s.estado_texto || s.estado);
+// color del estado según el tipo (rojo: solicitado, amarillo: ya gestionado, azul: sin disponibilidad, morado: JD, verde: disponible)
+const colorEstado = (tipo, k) => ((TIPOS.find(t => t.clave === tipo)?.estados || []).find(e => e.k === k) || {}).c || 'gris';
+const chipEstado = s => h('span', { class: 'estado c-' + (s.estado_color || colorEstado(s.tipo, s.estado)) }, s.estado_texto || s.estado);
 const dui4 = d => d ? '•••••' + String(d).slice(-4) : '';
 const tel = t => t ? h('a', { class: 'tel', href: 'tel:' + t }, '📞 ' + t.replace(/^(\d{4})(\d{4})$/, '$1-$2')) : null;
 
@@ -86,6 +85,7 @@ export default async function (params) {
   await cargarContexto();
   const pestanas = [
     ['bandeja', '📋 Bandeja'], ['nueva', '➕ Nueva solicitud'], ['dui', '🔎 Consultar por DUI'],
+    esAdmin() || soyResp('medicamento', 'DSIN') ? ['cefafa', '📧 CEFAFA'] : null,
     esAdmin() ? ['responsables', '👥 Responsables'] : null,
   ].filter(Boolean);
   let actual = pestanas.some(p => p[0] === params.get('ver')) ? params.get('ver') : 'bandeja';
@@ -97,7 +97,7 @@ export default async function (params) {
     barra.replaceChildren(...pestanas.map(([c, t]) => h('button', { class: c === actual ? 'activo' : '', onclick: () => ir(c) }, t)));
     zona.replaceChildren(h('p', { class: 'nota' }, 'Cargando…'));
     try {
-      zona.replaceChildren(await ({ bandeja, nueva: () => nueva(ir), dui: consultaDui, responsables })[k]());
+      zona.replaceChildren(await ({ bandeja, nueva: () => nueva(ir), dui: consultaDui, responsables, cefafa })[k]());
     } catch (e) { zona.replaceChildren(h('div', { class: 'aviso aviso-error' }, e.message)); }
   };
   await ir(actual);
@@ -120,7 +120,7 @@ async function nueva(ir) {
   const t2 = h('input', { class: 'campo', inputmode: 'tel', placeholder: 'Opcional' });
   const sector = select([['', '—'], ...SECTORES.map(s => [s, s])], '');
   const depto = select([['', '—'], ...DEPARTAMENTOS.map(d => [d, d])], '');
-  const sede = select([['', 'Elija la sede'], ...estado.sedes.map(s => [s.id, s.nombre])], estado.perfil.sede_id || '');
+  const sede = select([['', 'Sin sede / elija la sede'], ...estado.sedes.map(s => [s.id, s.nombre])], estado.perfil.contact_center ? '' : (estado.perfil.sede_id || ''));
   const infoDui = h('div', { class: 'info-dui' });
   dui.addEventListener('input', async () => {
     dui.value = dui.value.replace(/\D/g, '').slice(0, 9);
@@ -132,7 +132,7 @@ async function nueva(ir) {
       nombre.value = b.nombre || ''; t1.value = b.telefono || ''; t2.value = b.telefono2 || '';
       sector.value = b.sector || ''; depto.value = b.departamento || ''; if (b.sede_id) sede.value = b.sede_id;
       st.abiertas = b.abiertas || [];
-      infoDui.replaceChildren(h('span', { class: 'ok' }, '✔ Datos cargados. Corrija el teléfono si cambió.'),
+      infoDui.replaceChildren(h('span', { class: 'ok' }, '✔ Datos cargados. Si el teléfono cambió, corríjalo aquí: se actualiza al registrar.'),
         st.abiertas.length ? h('div', { class: 'aviso aviso-warn' }, `Tiene ${st.abiertas.length} solicitud(es) abierta(s): `,
           ...st.abiertas.map(a => h('button', { type: 'button', class: 'btn-enlace', onclick: () => abrir(a.id) }, `${a.numero} · ${a.solicita} (${a.estado})`))) : null);
     } catch (e) { error(e); }
@@ -224,7 +224,7 @@ async function nueva(ir) {
     const t = st.tipo;
     if (!t) throw new Error('Elija el tipo de solicitud');
     if (dui.value.length !== 9) throw new Error('El DUI debe tener 9 dígitos, sin guion');
-    if (!sede.value) throw new Error('Elija la sede de entrega');
+    if (!sede.value && ['medicamento', 'insumo'].includes(t)) throw new Error('Elija la sede de entrega: es obligatoria en medicamentos e insumos');
     if (t === 'medicamento' && !st.modalidad) throw new Error('Indique si es pendiente de entrega o primera vez');
     if (t === 'insumo' && (!st.primera_entrega || !st.tiene_evaluacion)) throw new Error('Responda las dos preguntas del insumo');
     if (t === 'insumo' && !st.prod && !st.fuera) throw new Error('Elija el insumo del catálogo o marque "No está en el catálogo"');
@@ -232,7 +232,7 @@ async function nueva(ir) {
     if (['medicamento', 'insumo'].includes(t) && !just.value) throw new Error('Elija la justificación');
     const p = {
       tipo: t, dui: dui.value, nombre: nombre.value, telefono: t1.value, telefono2: t2.value, sector: sector.value, departamento: depto.value,
-      sede_id: sede.value, origen: origen.value, origen_detalle: origenDet.value, prioridad: urgente.checked ? 'urgente' : 'normal',
+      sede_id: sede.value || null, origen: origen.value, origen_detalle: origenDet.value, prioridad: urgente.checked ? 'urgente' : 'normal',
       modalidad: st.modalidad || null,
       primera_entrega: t === 'insumo' ? st.primera_entrega === 'si' : undefined, tiene_evaluacion: t === 'insumo' ? st.tiene_evaluacion === 'si' : undefined,
       producto_id: st.prod?.id || null,
@@ -273,7 +273,7 @@ async function nueva(ir) {
     h('h2', {}, '2 · Beneficiario'),
     h('div', { class: 'rejilla-2' }, campo('DUI (9 dígitos, sin guion)', dui, 'Al completarlo se cargan los datos que ya tenemos'), infoDui),
     h('div', { class: 'rejilla-3' }, campo('Nombre completo', nombre), campo('Teléfono', t1), campo('Teléfono 2', t2)),
-    h('div', { class: 'rejilla-3' }, campo('Sector', sector), campo('Departamento', depto), campo('Sede de entrega', sede)),
+    h('div', { class: 'rejilla-3' }, campo('Sector', sector), campo('Departamento', depto), campo('Sede de entrega', sede, 'Obligatoria en medicamentos e insumos')),
     h('div', { class: 'rejilla-3' }, campo('Origen', origen), campo('Detalle del origen', origenDet),
       h('label', { class: 'casilla urgente' }, urgente, ' 🔴 Urgente (p. ej. paciente ingresado)')),
     h('h2', {}, '3 · Lo que solicita'), zonaTipo, campo('Comentario', comentario), destino,
@@ -313,16 +313,17 @@ async function bandeja() {
         h('button', { class: 'btn btn-sec btn-peq', onclick: () => exportarExcel('SIGAM_Solicitudes', [{ titulo: 'Solicitudes', cols: colsExcel, filas: fs }]) }, '⬇ Excel')),
       tabla([
         { t: '', f: s => semaforo(s), ancho: '18px' },
-        { t: 'Número', f: s => h('div', {}, h('strong', {}, s.numero), s.prioridad === 'urgente' ? h('div', {}, chip('URGENTE', 'chip-urgente')) : null), ord: s => s.numero },
+        { t: 'Número', f: s => h('div', {}, h('strong', {}, s.numero), s.prioridad === 'urgente' ? h('div', {}, chip('URGENTE', 'chip-urgente')) : null,
+            s.captado_cc ? h('div', { class: 'nota' }, 'Captado por CC') : null), ord: s => s.numero },
         { t: 'Tipo', f: s => `${s.icono} ${s.tipo_nombre}`, ord: s => s.tipo },
         { t: 'Beneficiario', f: s => h('div', {}, s.beneficiario, h('div', { class: 'nota' }, dui4(s.dui))), ord: s => s.beneficiario },
         { t: 'Solicita', f: s => h('div', {}, s.solicita, s.cantidad ? h('div', { class: 'nota' }, `${num(s.cantidad)} ${s.unidad || ''}`) : null), ord: s => s.solicita },
-        { t: 'Sede', k: 'sede' },
+        { t: 'Sede', f: s => s.sede || '—', ord: s => s.sede || '' },
         { t: 'Área', k: 'area' },
         { t: 'Estado', f: s => h('div', {}, chipEstado(s), s.posicion ? h('div', { class: 'nota' }, `Lista de espera: #${s.posicion}`) : null,
           s.dias_retiro != null ? h('div', { class: 'nota' }, textoPlazo(s)) : null), ord: s => s.estado_texto },
         { t: 'Días', f: s => ent(s.dias), num: true, ord: s => s.dias },
-      ], fs, { alClic: s => abrir(s.id, cargar), vacio: 'No hay solicitudes con estos filtros' })));
+      ], fs, { alClic: s => abrir(s.id, cargar, f.mias === 'validar' ? [...fs.slice(fs.indexOf(s)), ...fs.slice(0, fs.indexOf(s))].map(x => x.id) : []), vacio: 'No hay solicitudes con estos filtros' })));
   };
   const sel = (k, opciones, recarga = true) => { const s = select(opciones, f[k]); s.onchange = () => { f[k] = s.value; recarga ? cargar() : pintar(); }; return s; };
   const estados = [...new Map(TIPOS.flatMap(t => t.estados).map(e => [e.k, e.t])).entries()];
@@ -361,7 +362,7 @@ const colsExcel = [{ t: 'Número', k: 'numero' }, { t: 'Tipo', k: 'tipo_nombre' 
   { t: 'Validada por', k: 'validado_nombre' }, { t: 'Días', k: 'dias' }];
 
 // ============================================================================ detalle
-export async function abrir(id, alCambiar) {
+export async function abrir(id, alCambiar, cola = []) {
   const [s] = await q(sb.from('v_solicitudes').select('*').eq('id', id));
   if (!s) return toast('No tiene acceso a esa solicitud o no existe', 'error');
   const eventos = await q(sb.from('v_solicitud_eventos').select('*').eq('solicitud_id', id).order('at'));
@@ -370,7 +371,11 @@ export async function abrir(id, alCambiar) {
   const gestiona = esAdmin() || (esperaDsec ? soyResp(s.tipo, 'DSEC') : soyResp(s.tipo) || meToca(s));
   const valida = !s.es_final && ['registrada', 'contactado', 'evaluado'].includes(s.estado) && (esAdmin() || soyResp(s.tipo, s.area));
   let m;
-  const hecho = async (msg) => { dispararCorreos(); toast(msg); m.cerrar(); alCambiar && alCambiar(); };
+  const hecho = async (msg, siguiente = false) => {
+    dispararCorreos(); toast(msg); m.cerrar(); alCambiar && alCambiar();
+    const resto = cola.filter(x => x !== id);
+    if (siguiente && resto.length) abrir(resto[0], alCambiar, resto);   // quien valida va solicitud por solicitud
+  };
   const fila = (t, v) => v || v === 0 ? h('tr', {}, h('th', {}, t), h('td', {}, v)) : null;
   const t = tipoDe(s.tipo);
   const historial = h('ol', { class: 'historial' }, eventos.map(e => h('li', {},
@@ -383,14 +388,19 @@ export async function abrir(id, alCambiar) {
 
   const acciones = [];
   if (valida) {
-    acciones.push({ texto: '✖ No procede', clase: 'btn-peligro', accion: async () => {
-      const motivo = await pedirTexto('No procede', 'Motivo (le llegará por correo a quien la registró)'); if (!motivo) return false;
-      await rpc('validar_solicitud', { p_id: id, p_aprobar: false, p_nota: motivo }); hecho('Solicitud marcada como no procede');
+    const medIns = ['medicamento', 'insumo'].includes(s.tipo);
+    const txtOk = s.area === 'DSEC' ? '✔ Aprobar (finaliza)' : medIns ? '✔ Validar · Ya gestionado' : '✔ Validar';
+    const sig = cola.filter(x => x !== id).length;
+    acciones.push({ texto: '✖ No aplica', clase: 'btn-peligro', accion: async () => {
+      const motivo = await pedirTexto('No aplica', 'Motivo (le llegará por correo a quien la registró)'); if (!motivo) return false;
+      await rpc('validar_solicitud', { p_id: id, p_aprobar: false, p_nota: motivo }); hecho('Solicitud marcada como no aplica', true);
     } });
-    acciones.push({ texto: '✔ Validar', clase: 'btn-primario', accion: async () => {
-      const nota = await pedirTexto('Validar solicitud', s.area === 'DSEC' && ['medicamento', 'insumo'].includes(s.tipo) ? 'Comentario (al validarla pasa a DSIN para gestión y entrega)' : 'Comentario (opcional)', { minimo: 0 });
+    acciones.push({ texto: txtOk + (sig ? ' y siguiente' : ''), clase: 'btn-primario', accion: async () => {
+      if (s.tipo === 'medicamento' && s.area === 'DSIN' && !s.producto_id && !await confirmar('Sin producto definido',
+        'Aún no eligió el producto del catálogo (el que enviará CEFAFA). Sin producto, SIGAM no podrá avisar cuando llegue. ¿Validar de todos modos?', 'Validar')) return false;
+      const nota = await pedirTexto('Validar solicitud', s.area === 'DSEC' ? 'Comentario (con la aprobación de DSEC finaliza la gestión)' : 'Comentario (opcional)', { minimo: 0 });
       if (nota === null) return false;
-      await rpc('validar_solicitud', { p_id: id, p_aprobar: true, p_nota: nota }); hecho('Solicitud validada · se avisó por correo');
+      await rpc('validar_solicitud', { p_id: id, p_aprobar: true, p_nota: nota }); hecho('Solicitud validada · se avisó por correo', true);
     } });
   }
   const cuerpo = h('div', { class: 'detalle-sol' },
@@ -410,6 +420,7 @@ export async function abrir(id, alCambiar) {
         fila('Evaluación médica', s.tiene_evaluacion === null ? null : s.tiene_evaluacion ? 'Sí' : 'No'),
         fila('Ojo / oído', s.lado), fila('Diagnóstico', s.diagnostico), fila('Justificación', s.justificacion),
         fila('Registrada', `${fechaHora(s.creado_at)} · ${s.creado_nombre || s.creado_por}`),
+        fila('Captado por', s.captado),
         fila('Validada', s.validado_at ? `${fechaHora(s.validado_at)} · ${s.validado_nombre}` : null),
         fila('Seguimiento', s.asignado_nombre),
         fila('Puede retirar hasta', s.retiro_limite ? fecha(s.retiro_limite) : null)))),
@@ -469,6 +480,21 @@ function gestion(s, hecho) {
       zonaAlt.replaceChildren(...(alts.length ? [h('span', { class: 'nota' }, 'Mismo principio activo:'), ...alts.map(x => h('button', { class: 'btn btn-sec btn-peq', onclick: () => vincular(x) }, x.nombre_comercial))]
         : [h('span', { class: 'nota' }, 'No hay otros productos con ese principio activo en el catálogo.')]));
     }).catch(() => {});
+    if (!s.producto_id && s.producto_texto) {   // fuera de catálogo: quien valida lo agrega (sin código de barras)
+      const nc = h('input', { class: 'campo', value: s.producto_texto || '', placeholder: 'Nombre comercial' });
+      const npa = h('input', { class: 'campo', value: s.principio_activo || '', placeholder: 'Principio activo' });
+      const nco = h('input', { class: 'campo', value: s.concentracion || '', placeholder: 'Concentración' });
+      const npr = h('input', { class: 'campo', value: s.forma || '', placeholder: 'Presentación (p. ej. caja x 30 tabletas)' });
+      piezas.push(h('div', { class: 'bloque-sol' }, h('h3', {}, '➕ Agregar al catálogo'),
+        h('p', { class: 'nota' }, 'Fuera de catálogo: complete los datos con lo que ofrecerá el proveedor. Se agrega sin código de barras y queda vinculado a esta solicitud.'),
+        h('div', { class: 'rejilla-2' }, nc, s.tipo === 'medicamento' ? npa : null), h('div', { class: 'rejilla-2' }, s.tipo === 'medicamento' ? nco : null, npr),
+        h('div', { class: 'botones' }, h('button', { class: 'btn btn-primario btn-peq', onclick: async () => {
+          try {
+            await rpc('agregar_producto_solicitud', { p_id: s.id, p: { nombre_comercial: nc.value, principio_activo: npa.value, concentracion: nco.value, presentacion: npr.value } });
+            await productos(true); hecho('Agregado al catálogo y vinculado');
+          } catch (e) { error(e); }
+        } }, 'Agregar al catálogo y vincular'))));
+    }
     piezas.push(h('div', { class: s.producto_id ? 'bloque-sol' : 'aviso aviso-warn' },
       h('strong', {}, s.producto_id ? '💊 Producto que se entregará: ' + s.solicita : '⚠ Falta definir el producto del catálogo.'), ' ',
       h('span', { class: 'nota' }, s.producto_id ? 'Si CEFAFA ofrece otro con el mismo principio activo, cámbielo aquí.' : 'Elija lo que ofrece CEFAFA para que SIGAM avise cuando llegue.'),
@@ -492,7 +518,7 @@ async function consultaDui() {
         h('div', { class: 'consulta-sol' + (x.final ? ' cerrada' : '') },
           h('div', { class: 'tipo-icono' }, x.icono),
           h('div', {}, h('strong', {}, `${x.tipo}: ${x.solicita}`),
-            h('div', {}, h('span', { class: 'estado ' + (x.final ? 'st-muted' : 'st-info') }, x.estado), ` · ${x.sede} · ${x.numero}`),
+            h('div', {}, h('span', { class: 'estado c-' + colorEstado(TIPOS.find(t => t.nombre === x.tipo)?.clave, x.estado_k) }, x.estado), ` · ${x.sede || 'sin sede'} · ${x.numero}`),
             h('div', { class: 'nota' }, `Registrada el ${fecha(x.creado_at)} (hace ${x.dias} días)` + (x.posicion ? ` · Lista de espera: posición ${x.posicion}` : '')),
             x.ultimo ? h('div', { class: 'nota' }, 'Último comentario: ' + x.ultimo) : null,
             ['lista', 'avisado'].includes(x.estado_k) ? h('div', { class: 'plazo amarillo' }, '📦 Ya está reservado en la sede. Si el beneficiario está aquí, avise a un administrador para trasladarlo a Despacho (SIVET): pulse "Ver".') : null,
@@ -515,7 +541,7 @@ export async function seguimiento() {
   const cargar = async () => {
     let [filas, sivet] = await Promise.all([
       q(sb.from('v_solicitudes').select('*').is('cerrada_at', null)
-        .in('estado', ['lista', 'avisado', 'por_pasar', 'en_despacho', 'retiro_vencido', 'aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada', 'contactado', 'evaluado', 'programada']).limit(1000)),
+        .in('estado', ['lista', 'avisado', 'por_pasar', 'en_despacho', 'retiro_vencido', 'en_gestion', 'sin_disponibilidad', 'registrada', 'contactado', 'evaluado', 'programada']).limit(1000)),
       esAdmin() ? rpc('traslados_pendientes_sivet') : [],
     ]);
     const reservar = esAdmin() ? await rpc('por_reservar') : [];
@@ -529,7 +555,7 @@ export async function seguimiento() {
     const avisados = filas.filter(s => s.estado === 'avisado').sort((a, b) => (a.dias_retiro ?? 99) - (b.dias_retiro ?? 99));
     const enDespacho = filas.filter(s => s.estado === 'en_despacho').sort(orden);
     const hoyToca = filas.filter(s => !LLAMADAS.includes(s.estado) && s.proximo_contacto && s.proximo_contacto <= hoy).sort(orden);
-    const sinContacto = filas.filter(s => !LLAMADAS.includes(s.estado) && !s.proximo_contacto && !s.ultimo_contacto_at && ['aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada'].includes(s.estado)).sort(orden);
+    const sinContacto = filas.filter(s => !LLAMADAS.includes(s.estado) && !s.proximo_contacto && !s.ultimo_contacto_at && ['en_gestion', 'sin_disponibilidad', 'registrada'].includes(s.estado)).sort(orden);
     const pasables = porPasar.filter(enReserva);
     raiz.replaceChildren(
       h('section', { class: 'tarjeta' }, h('div', { class: 'rejilla' },
@@ -647,7 +673,65 @@ async function feriados() {
   await pintar();
   return caja;
 }
+// ============================================================================ CEFAFA: consulta periódica y respuesta
+async function cefafa() {
+  const raiz = h('div');
+  const pintar = async () => {
+    const [[c], items] = await Promise.all([q(sb.from('cefafa_config').select('*')), rpc('resumen_cefafa')]);
+    const dest = h('input', { class: 'campo', value: (c.destinatarios || []).join(', '), placeholder: 'correo@cefafa…, otro@cefafa…' });
+    const copia = h('input', { class: 'campo', value: (c.copia || []).join(', '), placeholder: 'Copia (opcional)' });
+    const frec = select([['7', 'Cada semana'], ['15', 'Cada 15 días'], ['30', 'Cada mes']], String(c.frecuencia_dias));
+    const prox = h('input', { class: 'campo', type: 'date', value: c.proximo_envio || '' });
+    const activo = h('input', { type: 'checkbox', checked: c.activo });
+    const responder = async (it, respuesta) => {
+      let producto = null, nota = null;
+      if (respuesta === 'alterno') {
+        producto = await new Promise(res => { const mm = modal('Producto alterno que ofrece CEFAFA', h('div', {},
+          h('p', { class: 'nota' }, `Para: ${it.producto} (${it.principio_activo || 'sin principio activo'}). Si no está en el catálogo, agréguelo desde la solicitud.`),
+          buscadorProducto({ filtro: p => p.tipo === 'medicamento', alElegir: p => { mm.cerrar(); res(p.id); } })), { alCerrar: () => res(null) }); });
+        if (!producto) return;
+      }
+      nota = await pedirTexto('Respuesta de CEFAFA', 'Comentario (opcional, queda en el historial de cada solicitud)', { minimo: 0 });
+      if (nota === null) return;
+      try { const n = await rpc('responder_cefafa', { p_ids: it.ids, p_respuesta: respuesta, p_producto: producto, p_nota: nota }); toast(`${n} solicitud(es) actualizada(s)`); pintar(); }
+      catch (e) { error(e); }
+    };
+    raiz.replaceChildren(
+      h('section', { class: 'tarjeta' }, h('h2', {}, 'Consulta periódica de disponibilidad a CEFAFA'),
+        h('p', { class: 'nota' }, 'SIGAM envía un correo con los medicamentos "Ya gestionado" y "Sin disponibilidad", agrupados por producto, sin datos de beneficiarios. CEFAFA responde por correo y aquí se registra la respuesta.'),
+        h('div', { class: 'rejilla-2' }, campo('Correo(s) de CEFAFA', dest), campo('Copia', copia)),
+        h('div', { class: 'filtros' }, campo('Frecuencia', frec), campo('Próximo envío', prox, 'Puede cambiarla'),
+          h('label', { class: 'casilla' }, activo, ' Envío automático activo'),
+          h('div', { class: 'fila-campo' }, h('span', {}, '\u00a0'), h('button', { class: 'btn btn-sec', onclick: async () => {
+            try { await rpc('guardar_config_cefafa', { p: { destinatarios: dest.value, copia: copia.value, frecuencia_dias: frec.value, proximo_envio: prox.value, activo: activo.checked } }); toast('Configuración guardada'); pintar(); }
+            catch (e) { error(e); }
+          } }, 'Guardar'))),
+        h('p', { class: 'nota' }, c.ultimo_envio ? `Último envío: ${fechaHora(c.ultimo_envio)}.` : 'Aún no se ha enviado.')),
+      h('section', { class: 'tarjeta' },
+        h('div', { class: 'botones' }, h('h2', {}, `Medicamentos por consultar (${items.length})`), h('span', { class: 'espacio' }),
+          h('button', { class: 'btn btn-sec btn-peq', onclick: () => exportarExcel('SIGAM_consulta_CEFAFA', [{ titulo: 'CEFAFA', cols: [{ t: 'Código', k: 'codigo' }, { t: 'Medicamento', k: 'producto' },
+            { t: 'Principio activo', k: 'principio_activo' }, { t: 'Presentación', k: 'presentacion' }, { t: 'Cantidad', k: 'cantidad' }, { t: 'Personas', k: 'personas' }, { t: 'Sedes', k: 'sedes' }], filas: items }]) }, '⬇ Excel'),
+          h('button', { class: 'btn btn-primario btn-peq', onclick: async () => {
+            if (!await confirmar('Enviar ahora a CEFAFA', `Se enviará la consulta de ${items.length} medicamento(s) a ${(c.destinatarios || []).join(', ') || '(sin correo configurado)'} y la fecha del próximo envío se moverá.`, 'Enviar')) return;
+            try { const n = await rpc('enviar_resumen_cefafa', { p_forzar: true }); dispararCorreos(); toast(n ? `Consulta enviada (${n} medicamentos)` : 'No hay medicamentos por consultar'); pintar(); } catch (e) { error(e); }
+          } }, '📧 Enviar ahora')),
+        h('p', { class: 'nota' }, 'Cuando CEFAFA responda, registre por producto: se actualizan todas las solicitudes del grupo.'),
+        tabla([
+          { t: 'Medicamento', f: it => h('div', {}, h('strong', {}, it.producto), h('div', { class: 'nota' }, [it.codigo, it.principio_activo, it.presentacion].filter(Boolean).join(' · '))) },
+          { t: 'Cantidad', f: it => num(it.cantidad), num: true }, { t: 'Personas', k: 'personas', num: true }, { t: 'Sedes', k: 'sedes' },
+          { t: 'Estado', f: it => it.sin_disponibilidad ? h('span', { class: 'estado c-azul' }, `${it.sin_disponibilidad} sin disponibilidad`) : h('span', { class: 'estado c-amarillo' }, 'Ya gestionado') },
+          { t: 'Respuesta de CEFAFA', f: it => h('div', { class: 'botones botones-llamada' },
+            h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, 'hay'); } }, '✔ Hay'),
+            h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, 'no_hay'); } }, '✖ No hay'),
+            h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, 'alterno'); } }, '↔ Alterno'),
+            h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, 'jd'); } }, '⏳ JD'),
+            h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, 'no_disponible'); } }, 'No disponible')) },
+        ], items, { vacio: 'No hay medicamentos "Ya gestionado" o "Sin disponibilidad" por consultar' })));
+  };
+  await pintar();
+  return raiz;
+}
 const reglaTipo = k => ({
-  medicamento: 'Primera vez → DSEC (valida un médico); pendiente de entrega → DSIN. Lo aprobado por DSEC pasa a DSIN.',
-  insumo: 'Sin evaluación médica → DSEC; con evaluación → DSIN. Lo aprobado por DSEC pasa a DSIN.',
-  auditivo: 'Va a DSEC.', lentes: 'Va a DSEC.', cirugia_oftalmica: 'Va a DSEC.' })[k] || '';
+  medicamento: 'Primera vez → DSEC (la aprobación médica finaliza); pendiente de entrega → DSIN (queda "Ya gestionado").',
+  insumo: 'Sin evaluación médica → DSEC (la aprobación finaliza); con evaluación → DSIN.',
+  auditivo: 'Va a DSIN.', lentes: 'Va a DSIN.', cirugia_oftalmica: 'Va a DSIN.' })[k] || '';

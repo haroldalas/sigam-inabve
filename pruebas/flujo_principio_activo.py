@@ -4,7 +4,7 @@ ok = lambda c, m: print(('  ✔ ' if c else '  ✘ ') + m)
 def sql(s):
     r = subprocess.run(['su','postgres','-c',f'psql -d sigam -At -c "{s}"'],capture_output=True,text=True); return r.stdout.strip() or r.stderr.strip()
 D='055500033'
-sql(f"delete from solicitud_eventos where solicitud_id in (select id from solicitudes where dui='{D}'); delete from solicitudes where dui='{D}'")
+sql(f"delete from solicitud_eventos where solicitud_id in (select id from solicitudes where dui='{D}'); delete from solicitudes where dui='{D}'; delete from beneficiarios where dui='{D}'")
 sql("delete from solicitud_responsables where tipo='medicamento' and area='DSIN'; insert into solicitud_responsables (tipo,area,email) values ('medicamento','DSIN','iris.ramirez@inabve.gob.sv')")
 pa = sql("select upper(principio_activo) from productos where id=750")
 with sync_playwright() as p:
@@ -21,7 +21,9 @@ with sync_playwright() as p:
     pg=contexto(br,'dep').new_page(); pg.on('pageerror', lambda e: errs.append(str(e)))
     sid = sql(f"select id from solicitudes where dui='{D}'")
     pg.goto(f'http://localhost:8080/#solicitudes?id={sid}'); pg.wait_for_selector('.detalle-sol', timeout=60000)
-    pg.click('.modal >> text=✔ Validar'); pg.wait_for_selector('.modal >> nth=1'); pg.click('.modal >> nth=1 >> text=Aceptar'); pg.wait_for_selector('.toast')
+    pg.locator('.modal button', has_text='Validar · Ya gestionado').click(); pg.wait_for_selector('text=Sin producto definido')
+    pg.locator('.modal').last.locator('button', has_text='Validar').last.click(); pg.wait_for_selector('.modal >> text=Comentario')
+    pg.locator('.modal').last.locator('button', has_text='Aceptar').click(); pg.wait_for_selector('.toast')
     pg.goto(f'http://localhost:8080/#solicitudes?ver=bandeja&id={sid}'); pg.wait_for_selector('.detalle-sol', timeout=60000); pg.wait_for_timeout(1500)
     ok('Falta definir el producto' in pg.inner_text('.detalle-sol'), 'DSIN ve que falta definir el producto')
     pg.screenshot(path='shots/a2_dsin.png')

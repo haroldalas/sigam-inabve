@@ -29,12 +29,14 @@ async function usuarios() {
     const sede = select([['', '— ninguna —'], ...estado.sedes.map(s => [s.id, s.nombre])], u.sede_id || '');
     const activo = h('input', { type: 'checkbox', checked: nuevo ? true : u.activo });
     const seguimiento = h('input', { type: 'checkbox', checked: !!u.seguimiento });
+    const cc = h('input', { type: 'checkbox', checked: !!u.contact_center });
     modal(nuevo ? 'Nuevo usuario' : u.email, h('div', {},
       h('label', { class: 'fila-campo' }, h('span', {}, 'Correo institucional'), email),
       h('label', { class: 'fila-campo' }, h('span', {}, 'Nombre completo'), nombre),
       h('div', { class: 'fila' }, h('label', { class: 'fila-campo' }, h('span', {}, 'Rol'), rol), h('label', { class: 'fila-campo' }, h('span', {}, 'Sede'), sede)),
       h('label', { class: 'check' }, activo, 'Acceso habilitado'),
       h('label', { class: 'check' }, seguimiento, '📞 Seguimiento telefónico (llama a los beneficiarios de su sede)'),
+      h('label', { class: 'check' }, cc, '🎧 Contact Center (sus solicitudes quedan "Captado por CC"; no necesita sede)'),
       h('p', { class: 'nota' }, 'Dependiente: opera las bodegas de su sede. Jefatura: ve existencias, kardex y tableros de todas las sedes, sin operar. Consulta: ve existencias y medicamentos nuevos (médicos, Contact Center). Administrador: todo.')), {
       acciones: [
         ...(!nuevo && u.id && u.id !== estado.perfil.id ? [
@@ -54,7 +56,7 @@ async function usuarios() {
         { texto: 'Guardar', clase: 'btn-primario', accion: async () => {
         if (rol.value === 'dependiente' && !sede.value) { toast('Un dependiente debe tener sede', 'error'); return false; }
         if (seguimiento.checked && !sede.value) { toast('Para el seguimiento telefónico indique la sede de la que llamará', 'error'); return false; }
-        const datos = { nombre: nombre.value.trim(), rol: rol.value, sede_id: sede.value ? Number(sede.value) : null, activo: activo.checked, seguimiento: seguimiento.checked, ...(activo.checked ? { estado_solicitud: 'aprobada' } : {}) };
+        const datos = { nombre: nombre.value.trim(), rol: rol.value, sede_id: sede.value ? Number(sede.value) : null, activo: activo.checked, seguimiento: seguimiento.checked, contact_center: cc.checked, ...(activo.checked ? { estado_solicitud: 'aprobada' } : {}) };
         if (nuevo) {
           const e = email.value.trim().toLowerCase();
           if (!/^[^@]+@inabve\.gob\.sv$/.test(e)) { toast('Debe ser un correo @inabve.gob.sv', 'error'); return false; }
@@ -70,7 +72,7 @@ async function usuarios() {
     const t = quitarTildes(buscar.value.toLowerCase());
     zona.replaceChildren(tabla([
       { t: 'Nombre', k: 'nombre' }, { t: 'Correo', k: 'email' }, { t: 'Rol', f: r => ROLES.find(x => x[0] === r.rol)?.[1] },
-      { t: 'Sede', f: r => nomSede(r.sede_id) }, { t: 'Seguimiento', f: r => r.seguimiento ? '📞' : '' }, { t: 'Acceso', f: r => r.activo ? h('span', { class: 'estado st-ok' }, 'Habilitado')
+      { t: 'Sede', f: r => nomSede(r.sede_id) }, { t: 'Seguimiento', f: r => (r.seguimiento ? '📞' : '') + (r.contact_center ? ' 🎧 CC' : '') }, { t: 'Acceso', f: r => r.activo ? h('span', { class: 'estado st-ok' }, 'Habilitado')
         : r.estado_solicitud === 'pendiente' ? h('span', { class: 'estado st-warn' }, 'Solicitud por revisar')
         : r.estado_solicitud === 'rechazada' ? h('span', { class: 'estado st-danger' }, 'Rechazada')
         : h('span', { class: 'estado st-muted' }, r.id ? 'Ingresó, sin solicitud' : 'Sin acceso') },

@@ -12,7 +12,7 @@ sql(f"delete from solicitud_eventos where solicitud_id in (select id from solici
 sql(f"insert into beneficiarios (dui,nombre,telefono,sede_id) values ('{D1}','ANA RESERVA PRUEBA','71110000',3),('{D2}','LUIS VENCIDO PRUEBA','72220000',3) on conflict do nothing")
 sql("insert into lotes (producto_id,bodega_id,numero_lote,fecha_vencimiento,cantidad_inicial,disponible) values (750,20,'RES-UI','2028-01-01',5,5)")
 for d, n in ((D1, 1), (D2, 2)):
-    sql(f"insert into solicitudes (numero,tipo,dui,sede_id,area,estado,producto_id,cantidad,unidad,creado_por,creado_nombre,modalidad) values ('SOL-T-{n}-'||(select count(*) from solicitudes),'medicamento','{d}',3,'DSIN','aprobada',750,{n},'sobre','harold.alas@inabve.gob.sv','Harold','pendiente_entrega')")
+    sql(f"insert into solicitudes (numero,tipo,dui,sede_id,area,estado,producto_id,cantidad,unidad,creado_por,creado_nombre,modalidad) values ('SOL-T-{n}-'||(select count(*) from solicitudes),'medicamento','{d}',3,'DSIN','en_gestion',750,{n},'sobre','harold.alas@inabve.gob.sv','Harold','pendiente_entrega')")
 lote = sql("select id from lotes where numero_lote='RES-UI' order by id desc limit 1")
 sql(f"insert into movimientos (tipo,lote_id,producto_id,bodega_id,cantidad,documento) values ('traslado_recepcion',{lote},750,20,3,'traslado')")
 antes = float(sql("select sum(disponible) from lotes where bodega_id=20"))

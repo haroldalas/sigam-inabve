@@ -66,9 +66,12 @@ with sync_playwright() as p:
     ok(pg.locator('a[data-ruta=solicitudes] .insignia:not(.oculto)').count() == 1, 'insignia con pendientes en el menú: ' + pg.inner_text('a[data-ruta=solicitudes]').replace('\n', ' '))
     pg.locator('.filtros select').first.select_option('validar'); pg.wait_for_timeout(800)
     pg.click(f'td:has-text("Carlos Prueba")'); pg.wait_for_selector('.detalle-sol')
-    pg.click('.modal >> text=✔ Validar'); pg.wait_for_selector('.modal >> nth=1'); pg.fill('.modal >> nth=1 >> textarea', 'Procede según indicación de neumología')
-    pg.click('.modal >> nth=1 >> text=Aceptar'); t = toast(pg); ok('validada' in t, t)
-    ok(sql(f"select area||'|'||estado||'|'||validado_por from solicitudes where dui='{DUI}' and tipo='medicamento'") in ('DSIN|aprobada|jose.avila@inabve.gob.sv', 'DSIN|lista|jose.avila@inabve.gob.sv'), 'aprobada y pasa a DSIN (o Lista si ya hay existencia)')
+    pg.locator('.modal button', has_text='Aprobar (finaliza)').click(); pg.wait_for_selector('.modal >> nth=1'); pg.fill('.modal >> nth=1 >> textarea', 'Procede según indicación de neumología')
+    pg.locator('.modal').last.locator('button', has_text='Aceptar').click(); t = toast(pg); ok('validada' in t, t)
+    ok(sql(f"select area||'|'||estado||'|'||validado_por from solicitudes where dui='{DUI}' and tipo='medicamento'") == 'DSEC|aprobada|jose.avila@inabve.gob.sv', 'DSEC aprueba y la gestión finaliza (no pasa a DSIN)')
+    ok(sql(f"select cerrada_at is not null from solicitudes where dui='{DUI}' and tipo='medicamento'") == 't', 'queda cerrada')
+    # para seguir probando la entrega: una de DSIN "Ya gestionado"
+    sql(f"update solicitudes set area='DSIN', estado='en_gestion', cerrada_at=null where dui='{DUI}' and tipo='medicamento'")
     ok(int(sql("select count(*) from correo_cola where asunto like 'Solicitud validada%' and 'iris.ramirez@inabve.gob.sv' = any(para)")) >= 1, 'correo de confirmación a quien la registró')
     ctx.close()
 
@@ -87,7 +90,7 @@ with sync_playwright() as p:
     print('6. Consulta por DUI')
     pg.goto('http://localhost:8080/#solicitudes?ver=dui'); pg.wait_for_selector('.dui-grande', timeout=30000)
     pg.fill('.dui-grande', DUI); pg.wait_for_selector('.consulta-sol', timeout=15000)
-    ok('Llamado: esperando retiro' in pg.inner_text('.lista-consulta'), 'muestra el estado: ' + pg.inner_text('.consulta-sol >> nth=0').split('\n')[1][:60])
+    ok('llamado, esperando retiro' in pg.inner_text('.lista-consulta'), 'muestra el estado: ' + pg.inner_text('.consulta-sol >> nth=0').split('\n')[1][:60])
     pg.screenshot(path='shots/s5_consulta.png', full_page=True)
     ctx.close()
 
