@@ -1,0 +1,34 @@
+import sys, subprocess; sys.path.insert(0,'.')
+from smoke import *
+ok = lambda c, m: print(('  ✔ ' if c else '  ✘ ') + m)
+def sql(s):
+    r = subprocess.run(['su','postgres','-c',f'psql -d sigam -At -c "{s}"'],capture_output=True,text=True); return r.stdout.strip() or r.stderr.strip()
+D='055500033'
+sql(f"delete from solicitud_eventos where solicitud_id in (select id from solicitudes where dui='{D}'); delete from solicitudes where dui='{D}'")
+sql("delete from solicitud_responsables where tipo='medicamento' and area='DSIN'; insert into solicitud_responsables (tipo,area,email) values ('medicamento','DSIN','iris.ramirez@inabve.gob.sv')")
+pa = sql("select upper(principio_activo) from productos where id=750")
+with sync_playwright() as p:
+    br=p.chromium.launch(); errs=[]
+    pg=contexto(br,'cons').new_page(); pg.on('pageerror', lambda e: errs.append(str(e)))
+    pg.goto('http://localhost:8080/#solicitudes?ver=nueva'); pg.wait_for_selector('.tipo-sol', timeout=60000)
+    pg.click('.tipo-sol[data-tipo=medicamento]'); pg.fill('.dui-grande', D); pg.wait_for_selector('text=Beneficiario nuevo')
+    pg.fill('input[placeholder="Nombre completo"]', 'Elena Principio Prueba'); pg.fill('input[placeholder="7000 0000"]', '71234567')
+    pg.locator('select').filter(has_text='Elija la sede').select_option('3'); pg.check('input[name=modalidad][value=pendiente_entrega]'); pg.fill('input[list=lista-pa]', pa); pg.fill('input[placeholder="Cantidad"]', '1')
+    pg.locator('select').filter(has_text='Elija la justificación').select_option('Continuidad de tratamiento')
+    pg.screenshot(path='shots/a1_por_principio.png', full_page=True)
+    pg.click('text=Registrar solicitud'); pg.wait_for_selector('.toast'); pg.wait_for_selector('.detalle-sol')
+    ok('principio activo: DSIN define el producto' in pg.inner_text('.detalle-sol'), 'se registra por principio activo: ' + sql(f"select producto_solicitado(s) from solicitudes s where dui='{D}'"))
+    pg=contexto(br,'dep').new_page(); pg.on('pageerror', lambda e: errs.append(str(e)))
+    sid = sql(f"select id from solicitudes where dui='{D}'")
+    pg.goto(f'http://localhost:8080/#solicitudes?id={sid}'); pg.wait_for_selector('.detalle-sol', timeout=60000)
+    pg.click('.modal >> text=✔ Validar'); pg.wait_for_selector('.modal >> nth=1'); pg.click('.modal >> nth=1 >> text=Aceptar'); pg.wait_for_selector('.toast')
+    pg.goto(f'http://localhost:8080/#solicitudes?ver=bandeja&id={sid}'); pg.wait_for_selector('.detalle-sol', timeout=60000); pg.wait_for_timeout(1500)
+    ok('Falta definir el producto' in pg.inner_text('.detalle-sol'), 'DSIN ve que falta definir el producto')
+    pg.screenshot(path='shots/a2_dsin.png')
+    btn = pg.locator('.gestion-sol button.btn-sec.btn-peq').filter(has_text='POSITRAL')
+    if btn.count(): btn.first.click()
+    else:
+        pg.fill('.gestion-sol input[type=search]', 'positral'); pg.wait_for_selector('.gestion-sol .sugerencia'); pg.click('.gestion-sol .sugerencia >> nth=0')
+    pg.wait_for_selector('.toast')
+    ok(sql(f"select estado||'|'||producto_id from solicitudes where dui='{D}'") == 'lista|750', 'DSIN define POSITRAL y, como hay en Reservas, queda Lista: ' + sql(f"select estado from solicitudes where dui='{D}'"))
+    ok(not errs, f'sin errores JS {errs[:3]}')

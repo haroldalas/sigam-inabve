@@ -28,7 +28,7 @@ with sync_playwright() as p:
     card = pg.locator('.tarjeta-llamada', has_text='ANA RESERVA'); card.locator('button', has_text='✅ Contestó').click(); toast(pg)
     pg.wait_for_selector('.tarjeta-llamada .plazo')
     card = pg.locator('.tarjeta-llamada', has_text='ANA RESERVA')
-    ok('quedan 7 día(s) hábil(es)' in card.inner_text(), 'muestra el plazo: ' + card.locator('.plazo').inner_text())
+    txt = card.inner_text(); ok('quedan 7 día(s) hábil(es)' in txt, 'muestra el plazo: ' + card.locator('.plazo').inner_text() + ' || ' + txt.replace(chr(10),' / ')[:300])
     ok(card.locator('text=Pasar a Despacho').count() == 0, 'el dependiente no tiene botón para pasar a Despacho')
     pg.screenshot(path='shots/r1_esperando.png', full_page=True)
     card.locator('text=Llegó a retirar: avisar a administración').click(); pg.wait_for_selector('.modal >> nth=0')

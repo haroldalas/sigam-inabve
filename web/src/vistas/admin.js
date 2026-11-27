@@ -1,5 +1,5 @@
 // Administración: usuarios, catálogo, mínimos por sede, parámetros y bitácora de cambios
-import { h, toast, error, num, fecha, fechaHora, tabla, estadoChip, modal, select, confirmar, chipsProducto, exportarExcel, debounce } from '../ui.js';
+import { h, toast, error, pedirTexto, num, fecha, fechaHora, tabla, estadoChip, modal, select, confirmar, chipsProducto, exportarExcel, debounce } from '../ui.js';
 import { sb, q, rpc, todas, estado, productos, quitarTildes } from '../api.js';
 import { refrescarInsignias } from '../main.js';
 import { buscadorProducto } from '../componentes.js';
@@ -45,6 +45,12 @@ async function usuarios() {
             toast('Cuenta eliminada'); caja.replaceWith(await usuarios());
           } },
           { texto: '🔑 Contraseña temporal', clase: 'btn-sec', accion: async () => { await claveTemporal(u); return false; } }] : []),
+        ...(!nuevo && !u.id ? [{ texto: '👤 Crear cuenta', clase: 'btn-sec', accion: async () => {
+          const c = await pedirTexto('Crear cuenta de ' + u.email, 'Contraseña temporal (mínimo 8 caracteres). Désela a la persona: al entrar SIGAM le pedirá cambiarla.', { minimo: 8 });
+          if (!c) return false;
+          try { await rpc('admin_crear_cuenta', { p_email: u.email, p_clave: c }); toast('Cuenta creada · la persona debe cambiar la contraseña al entrar', 'ok', 8000); caja.replaceWith(await usuarios()); }
+          catch (e) { error(e); return false; }
+        } }] : []),
         { texto: 'Guardar', clase: 'btn-primario', accion: async () => {
         if (rol.value === 'dependiente' && !sede.value) { toast('Un dependiente debe tener sede', 'error'); return false; }
         if (seguimiento.checked && !sede.value) { toast('Para el seguimiento telefónico indique la sede de la que llamará', 'error'); return false; }

@@ -68,7 +68,7 @@ with sync_playwright() as p:
     pg.click(f'td:has-text("Carlos Prueba")'); pg.wait_for_selector('.detalle-sol')
     pg.click('.modal >> text=✔ Validar'); pg.wait_for_selector('.modal >> nth=1'); pg.fill('.modal >> nth=1 >> textarea', 'Procede según indicación de neumología')
     pg.click('.modal >> nth=1 >> text=Aceptar'); t = toast(pg); ok('validada' in t, t)
-    ok(sql(f"select area||'|'||estado||'|'||validado_por from solicitudes where dui='{DUI}' and tipo='medicamento'") == 'DSIN|aprobada|jose.avila@inabve.gob.sv', 'aprobada y pasa a DSIN')
+    ok(sql(f"select area||'|'||estado||'|'||validado_por from solicitudes where dui='{DUI}' and tipo='medicamento'") in ('DSIN|aprobada|jose.avila@inabve.gob.sv', 'DSIN|lista|jose.avila@inabve.gob.sv'), 'aprobada y pasa a DSIN (o Lista si ya hay existencia)')
     ok(int(sql("select count(*) from correo_cola where asunto like 'Solicitud validada%' and 'iris.ramirez@inabve.gob.sv' = any(para)")) >= 1, 'correo de confirmación a quien la registró')
     ctx.close()
 

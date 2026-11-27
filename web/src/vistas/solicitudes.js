@@ -1,7 +1,7 @@
 // Solicitudes (todos los roles): medicamentos, insumos, aparatos auditivos, lentes y cirugías oftálmicas.
 // Un solo formato · autocompletar por DUI · ruteo DSEC/DSIN · validación · seguimiento telefónico · historial.
 import { h, tabla, toast, error, modal, confirmar, pedirTexto, select, campo, fecha, fechaHora, num, ent, exportarExcel, debounce, chip } from '../ui.js';
-import { sb, q, rpc, estado, esAdmin, dispararCorreos } from '../api.js';
+import { sb, q, rpc, estado, esAdmin, dispararCorreos, productos } from '../api.js';
 import { buscadorProducto } from '../componentes.js';
 
 const DEPARTAMENTOS = ['Ahuachapán', 'Santa Ana', 'Sonsonate', 'Chalatenango', 'La Libertad', 'San Salvador', 'Cuscatlán', 'La Paz',
@@ -160,6 +160,12 @@ async function nueva(ir) {
   const conc = h('input', { class: 'campo', placeholder: 'Concentración (500 mg, 2 %…)' });
   const forma = h('input', { class: 'campo', placeholder: 'Forma (tableta, crema, frasco…)' });
   const desc = h('input', { class: 'campo', placeholder: 'Descripción del insumo (p. ej. medias compresivas talla M)' });
+  const nomManual = h('input', { class: 'campo', placeholder: 'Nombre comercial (si lo sabe)' });
+  // principios activos del catálogo para elegir (el producto final lo valida DSIN según lo que ofrezca CEFAFA)
+  const catalogo = await productos().catch(() => []);
+  const listaPA = h('datalist', { id: 'lista-pa' }, [...new Set(catalogo.filter(x => x.tipo === 'medicamento' && x.principio_activo).map(x => x.principio_activo.toUpperCase()))].sort().map(v => h('option', { value: v })));
+  const paCat = h('input', { class: 'campo', list: 'lista-pa', placeholder: 'Principio activo (elija de la lista)' });
+  const concCat = h('input', { class: 'campo', placeholder: 'Concentración (opcional)' });
   const lado = select([['', '—'], ['derecho', 'Derecho'], ['izquierdo', 'Izquierdo'], ['bilateral', 'Bilateral']], '');
   const diag = h('input', { class: 'campo', placeholder: 'Diagnóstico (si lo tiene)' });
   const diagOft = select([['', 'Elija el diagnóstico presuntivo'], ...DIAGNOSTICOS_OFTAL.map(d => [d, d])], '');
@@ -182,14 +188,18 @@ async function nueva(ir) {
     h('button', { type: 'button', class: 'btn-enlace', onclick: () => { st.prod = null; pintarProd(); } }, 'Cambiar')) : '');
   const bloqueProducto = tipo => {
     const fuera = h('input', { type: 'checkbox', checked: st.fuera, onchange: e => { st.fuera = e.target.checked; st.prod = null; pintar(false); } });
-    const buscador = buscadorProducto({ autofocus: false, filtro: p => p.tipo === tipo, placeholder: tipo === 'medicamento' ? 'Busque el medicamento en el catálogo (nombre, principio activo o código)' : 'Busque el insumo en el catálogo',
-      alElegir: p => { st.prod = p; unidad.value = unidad.value || p.presentacion || ''; pintarProd(); } });
+    const buscador = buscadorProducto({ autofocus: false, filtro: p => p.tipo === tipo, placeholder: tipo === 'medicamento' ? 'Producto (opcional): nombre comercial o código' : 'Busque el insumo en el catálogo',
+      alElegir: p => { st.prod = p; unidad.value = unidad.value || p.presentacion || ''; if (p.principio_activo) paCat.value = p.principio_activo.toUpperCase(); pintarProd(); } });
     return h('div', { class: 'bloque-sol' },
       h('h3', {}, tipo === 'medicamento' ? 'Medicamento solicitado' : 'Insumo solicitado'),
       st.fuera ? (tipo === 'medicamento'
-        ? h('div', { class: 'rejilla-3' }, pa, conc, forma)
-        : desc) : h('div', {}, buscador, prodSel),
-      h('label', { class: 'casilla' }, fuera, ' No está en el catálogo'),
+        ? h('div', {}, h('div', { class: 'rejilla-2' }, nomManual, pa), h('div', { class: 'rejilla-2' }, conc, forma))
+        : desc)
+        : tipo === 'medicamento'
+          ? h('div', {}, h('p', { class: 'nota' }, 'Elija el producto, el principio activo o ambos. Si CEFAFA ofrece un alterno con el mismo principio activo, DSIN lo valida.'),
+              buscador, prodSel, h('div', { class: 'rejilla-2' }, paCat, concCat), listaPA)
+          : h('div', {}, buscador, prodSel),
+      h('label', { class: 'casilla' }, fuera, tipo === 'medicamento' ? ' No está en el catálogo (escribir nombre y principio activo)' : ' No está en el catálogo'),
       h('div', { class: 'rejilla-3' }, cantidad, unidad, h('div', {}, just, justOtro)));
   };
   const pintarTipo = () => {
@@ -217,7 +227,8 @@ async function nueva(ir) {
     if (!sede.value) throw new Error('Elija la sede de entrega');
     if (t === 'medicamento' && !st.modalidad) throw new Error('Indique si es pendiente de entrega o primera vez');
     if (t === 'insumo' && (!st.primera_entrega || !st.tiene_evaluacion)) throw new Error('Responda las dos preguntas del insumo');
-    if (['medicamento', 'insumo'].includes(t) && !st.prod && !st.fuera) throw new Error('Elija el producto del catálogo o marque "No está en el catálogo"');
+    if (t === 'insumo' && !st.prod && !st.fuera) throw new Error('Elija el insumo del catálogo o marque "No está en el catálogo"');
+    if (t === 'medicamento' && !st.fuera && !st.prod && !paCat.value.trim()) throw new Error('Elija el producto o el principio activo (o marque "No está en el catálogo")');
     if (['medicamento', 'insumo'].includes(t) && !just.value) throw new Error('Elija la justificación');
     const p = {
       tipo: t, dui: dui.value, nombre: nombre.value, telefono: t1.value, telefono2: t2.value, sector: sector.value, departamento: depto.value,
@@ -225,15 +236,15 @@ async function nueva(ir) {
       modalidad: st.modalidad || null,
       primera_entrega: t === 'insumo' ? st.primera_entrega === 'si' : undefined, tiene_evaluacion: t === 'insumo' ? st.tiene_evaluacion === 'si' : undefined,
       producto_id: st.prod?.id || null,
-      producto_texto: st.fuera ? (t === 'medicamento' ? [pa.value, conc.value, forma.value].filter(x => x.trim()).join(' ') : desc.value) : null,
-      principio_activo: st.fuera && t === 'medicamento' ? pa.value : (st.prod?.principio_activo || null),
-      concentracion: st.fuera ? conc.value : null, forma: st.fuera ? forma.value : null,
+      producto_texto: st.fuera ? (t === 'medicamento' ? (nomManual.value.trim() || [pa.value, conc.value, forma.value].filter(x => x.trim()).join(' ')) : desc.value) : null,
+      principio_activo: t !== 'medicamento' ? (st.prod?.principio_activo || null) : st.fuera ? pa.value : (paCat.value.trim() || st.prod?.principio_activo || null),
+      concentracion: st.fuera ? conc.value : (t === 'medicamento' && !st.prod ? concCat.value : null), forma: st.fuera ? forma.value : null,
       cantidad: cantidad.value, unidad: unidad.value,
       justificacion: just.value === 'Otro' ? 'Otro: ' + justOtro.value : just.value,
       lado: lado.value || null, diagnostico: t === 'cirugia_oftalmica' ? diagOft.value : diag.value,
       comentario: comentario.value, forzar,
     };
-    if (st.fuera && t === 'medicamento' && !pa.value.trim()) throw new Error('Escriba el principio activo');
+    if (st.fuera && t === 'medicamento' && !pa.value.trim()) throw new Error('Escriba el principio activo (y el nombre comercial si lo sabe)');
     if (st.fuera && t === 'insumo' && !desc.value.trim()) throw new Error('Describa el insumo');
     try {
       const r = await rpc('crear_solicitud', { p });
@@ -448,11 +459,21 @@ function gestion(s, hecho) {
         try { await rpc('asignar_solicitud', { p_id: s.id, p_email: asig.value }); hecho('Asignación guardada'); } catch (e) { error(e); }
       } }, 'Asignar'))),
   ];
-  if (['medicamento', 'insumo'].includes(s.tipo) && !s.producto_id) {
-    piezas.push(h('div', { class: 'aviso aviso-warn' }, 'Producto fuera del catálogo. Cuando lo agreguen al catálogo, vincúlelo aquí para que SIGAM avise al llegar a la sede.',
-      buscadorProducto({ autofocus: false, filtro: p => p.tipo === s.tipo, placeholder: 'Buscar el producto ya agregado al catálogo', alElegir: async p => {
-        try { await rpc('vincular_producto_solicitud', { p_id: s.id, p_producto: p.id }); hecho('Producto vinculado'); } catch (e) { error(e); }
-      } })));
+  if (['medicamento', 'insumo'].includes(s.tipo) && !['lista', 'avisado', 'por_pasar', 'en_despacho', 'retiro_vencido'].includes(s.estado)) {
+    // DSIN valida el producto que entregará (lo que ofrece CEFAFA; puede ser un alterno con el mismo principio activo)
+    const zonaAlt = h('div', { class: 'botones', style: { flexWrap: 'wrap', gap: '6px' } });
+    const vincular = async p => { try { await rpc('vincular_producto_solicitud', { p_id: s.id, p_producto: p.id }); hecho('Producto definido: ' + p.nombre_comercial); } catch (e) { error(e); } };
+    if (s.principio_activo) productos().then(cat => {
+      const pa = s.principio_activo.toUpperCase();
+      const alts = cat.filter(x => x.tipo === s.tipo && x.activo !== false && (x.principio_activo || '').toUpperCase() === pa && x.id !== s.producto_id).slice(0, 8);
+      zonaAlt.replaceChildren(...(alts.length ? [h('span', { class: 'nota' }, 'Mismo principio activo:'), ...alts.map(x => h('button', { class: 'btn btn-sec btn-peq', onclick: () => vincular(x) }, x.nombre_comercial))]
+        : [h('span', { class: 'nota' }, 'No hay otros productos con ese principio activo en el catálogo.')]));
+    }).catch(() => {});
+    piezas.push(h('div', { class: s.producto_id ? 'bloque-sol' : 'aviso aviso-warn' },
+      h('strong', {}, s.producto_id ? '💊 Producto que se entregará: ' + s.solicita : '⚠ Falta definir el producto del catálogo.'), ' ',
+      h('span', { class: 'nota' }, s.producto_id ? 'Si CEFAFA ofrece otro con el mismo principio activo, cámbielo aquí.' : 'Elija lo que ofrece CEFAFA para que SIGAM avise cuando llegue.'),
+      zonaAlt,
+      buscadorProducto({ autofocus: false, filtro: p => p.tipo === s.tipo, placeholder: 'Buscar el producto en el catálogo', alElegir: vincular })));
   }
   return h('div', { class: 'gestion-sol' }, ...piezas);
 }
