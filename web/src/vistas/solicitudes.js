@@ -27,8 +27,8 @@ const tipoDe = k => TIPOS.find(t => t.clave === k) || {};
 const soyResp = (tipo, area) => RESP.some(r => r.email === estado.perfil.email && r.tipo === tipo && (!area || r.area === area));
 const veoSeguimiento = () => esAdmin() || estado.perfil.rol === 'dependiente' || RESP.some(r => r.email === estado.perfil.email && ['DSIN', 'SEGUIMIENTO'].includes(r.area));
 // JPII: responsables de Seguimiento telefónico · regionales: dependientes de la sede (medicamentos e insumos)
-const meToca = s => soyResp(s.tipo, 'DSIN') || (s.sede_id === 1 ? soyResp(s.tipo, 'SEGUIMIENTO')
-  : estado.perfil.rol === 'dependiente' && estado.perfil.sede_id === s.sede_id && ['medicamento', 'insumo'].includes(s.tipo));
+// llama quien tiene el permiso de seguimiento (Administración → Usuarios), para su sede; DSIN en todas
+const meToca = s => soyResp(s.tipo, 'DSIN') || (!!estado.perfil.seguimiento && estado.perfil.sede_id === s.sede_id && ['medicamento', 'insumo'].includes(s.tipo));
 const enReserva = s => s.bodega_reserva_tipo && !['despacho_medicamentos', 'almacen_insumos'].includes(s.bodega_reserva_tipo);
 const textoPlazo = s => s.dias_retiro == null ? '' : s.dias_retiro > 0 ? `retira a más tardar el ${fecha(s.retiro_limite)} · quedan ${s.dias_retiro} día(s) hábil(es)`
   : s.dias_retiro === 0 ? `hoy (${fecha(s.retiro_limite)}) es el último día para retirar` : `venció el ${fecha(s.retiro_limite)}`;
@@ -39,12 +39,26 @@ async function avisarLlegada(s, alTerminar) {
   try { await rpc('solicitar_pase_despacho', { p_id: s.id, p_nota: nota }); toast('Administración fue avisada por correo', 'ok', 6000); alTerminar && alTerminar(); }
   catch (e) { error(e); }
 }
+// ¿está el producto? (para el médico o quien atiende al beneficiario en la clínica)
+function cajaDisponibilidad(s, dispo, alTerminar) {
+  const res = dispo.filter(d => d.tipo === 'reservas').reduce((a, d) => a + Number(d.cantidad), 0);
+  const des = dispo.filter(d => d.tipo !== 'reservas').reduce((a, d) => a + Number(d.cantidad), 0);
+  if (s.estado === 'en_despacho' || (des > 0 && !res))
+    return h('div', { class: 'aviso aviso-ok' }, `✔ Disponible en Despacho de ${s.sede} (${num(des)} u.): se puede despachar con su DUI.`);
+  if (res > 0) return h('div', { class: 'aviso aviso-warn' },
+    h('strong', {}, `📦 Sí está: reservado en ${s.sede} (${num(res)} u. en Reservas).`), ' ',
+    s.estado === 'por_pasar' ? 'Administración ya fue avisada para trasladarlo a Despacho y registrarlo en SIVET.'
+      : 'Aún no está en Despacho ni en SIVET: avise a un administrador para trasladarlo a SIVET.', ' ',
+    !esAdmin() && ['lista', 'avisado'].includes(s.estado) ? h('button', { class: 'btn btn-primario btn-peq', onclick: () => avisarLlegada(s, alTerminar) }, 'Avisar a administración') : null,
+    esAdmin() ? botonPase(s, alTerminar) : null);
+  return h('div', { class: 'aviso aviso-info' }, `⏳ Todavía no hay existencia de este producto en ${s.sede} para esta solicitud.`);
+}
 // botón según quién: administración pasa a Despacho; quien llama avisa que llegó
 function botonPase(s, alTerminar) {
   if (!enReserva(s)) return s.bodega_reserva ? h('span', { class: 'nota' }, 'Ya está en el Despacho: despáchele con su DUI.') : null;
   if (esAdmin() && ['avisado', 'por_pasar', 'retiro_vencido'].includes(s.estado))
     return h('button', { class: 'btn btn-primario btn-peq', onclick: () => pasarADespacho([s], s.estado === 'retiro_vencido', alTerminar) }, '🏥 Pasar a Despacho');
-  if (s.estado === 'avisado' && meToca(s))
+  if (['lista', 'avisado'].includes(s.estado))   // cualquiera (quien llama, el médico, Contact Center)
     return h('button', { class: 'btn btn-primario btn-peq', onclick: () => avisarLlegada(s, alTerminar) }, '🏥 Llegó a retirar: avisar a administración');
   return null;
 }
@@ -61,7 +75,6 @@ async function pasarADespacho(sols, vencidas, alTerminar) {
     alTerminar && alTerminar();
   } catch (e) { error(e); }
 }
-const veoTablero = () => ['administrador', 'jefatura'].includes(estado.perfil.rol);
 
 export async function cargarContexto() {
   [TIPOS, RESP] = await Promise.all([
@@ -73,7 +86,6 @@ export default async function (params) {
   await cargarContexto();
   const pestanas = [
     ['bandeja', '📋 Bandeja'], ['nueva', '➕ Nueva solicitud'], ['dui', '🔎 Consultar por DUI'],
-    veoTablero() ? ['tablero', '📊 Tablero'] : null,
     esAdmin() ? ['responsables', '👥 Responsables'] : null,
   ].filter(Boolean);
   let actual = pestanas.some(p => p[0] === params.get('ver')) ? params.get('ver') : 'bandeja';
@@ -85,7 +97,7 @@ export default async function (params) {
     barra.replaceChildren(...pestanas.map(([c, t]) => h('button', { class: c === actual ? 'activo' : '', onclick: () => ir(c) }, t)));
     zona.replaceChildren(h('p', { class: 'nota' }, 'Cargando…'));
     try {
-      zona.replaceChildren(await ({ bandeja, nueva: () => nueva(ir), dui: consultaDui, tablero, responsables })[k]() );
+      zona.replaceChildren(await ({ bandeja, nueva: () => nueva(ir), dui: consultaDui, responsables })[k]());
     } catch (e) { zona.replaceChildren(h('div', { class: 'aviso aviso-error' }, e.message)); }
   };
   await ir(actual);
@@ -343,6 +355,7 @@ export async function abrir(id, alCambiar) {
   if (!s) return toast('No tiene acceso a esa solicitud o no existe', 'error');
   const eventos = await q(sb.from('v_solicitud_eventos').select('*').eq('solicitud_id', id).order('at'));
   const esperaDsec = s.area === 'DSEC' && !s.validado_at;   // aún no la valida el médico de DSEC
+  const dispo = ['medicamento', 'insumo'].includes(s.tipo) && s.producto_id && !s.es_final ? await rpc('disponibilidad_solicitud', { p_id: id }).catch(() => []) : null;
   const gestiona = esAdmin() || (esperaDsec ? soyResp(s.tipo, 'DSEC') : soyResp(s.tipo) || meToca(s));
   const valida = !s.es_final && ['registrada', 'contactado', 'evaluado'].includes(s.estado) && (esAdmin() || soyResp(s.tipo, s.area));
   let m;
@@ -389,6 +402,7 @@ export async function abrir(id, alCambiar) {
         fila('Validada', s.validado_at ? `${fechaHora(s.validado_at)} · ${s.validado_nombre}` : null),
         fila('Seguimiento', s.asignado_nombre),
         fila('Puede retirar hasta', s.retiro_limite ? fecha(s.retiro_limite) : null)))),
+    dispo ? cajaDisponibilidad(s, dispo, () => { m.cerrar(); alCambiar && alCambiar(); }) : null,
     s.estado === 'lista' ? h('div', { class: 'aviso aviso-ok' }, `📦 El producto llegó (${s.bodega_reserva || s.sede}) el ${fechaHora(s.producto_disponible_at)}. Llame al beneficiario: desde la llamada tiene 7 días hábiles para retirar.`) : null,
     ['avisado', 'retiro_vencido'].includes(s.estado) ? h('div', { class: 'aviso ' + (s.estado === 'avisado' ? 'aviso-info' : 'aviso-error') },
       s.estado === 'avisado' ? `📞 Llamado el ${fechaHora(s.avisado_at)}: ${textoPlazo(s)}.` : `⏳ No retiró en 7 días hábiles (límite ${fecha(s.retiro_limite)}).`,
@@ -459,7 +473,10 @@ async function consultaDui() {
           h('div', {}, h('strong', {}, `${x.tipo}: ${x.solicita}`),
             h('div', {}, h('span', { class: 'estado ' + (x.final ? 'st-muted' : 'st-info') }, x.estado), ` · ${x.sede} · ${x.numero}`),
             h('div', { class: 'nota' }, `Registrada el ${fecha(x.creado_at)} (hace ${x.dias} días)` + (x.posicion ? ` · Lista de espera: posición ${x.posicion}` : '')),
-            x.ultimo ? h('div', { class: 'nota' }, 'Último comentario: ' + x.ultimo) : null),
+            x.ultimo ? h('div', { class: 'nota' }, 'Último comentario: ' + x.ultimo) : null,
+            ['lista', 'avisado'].includes(x.estado_k) ? h('div', { class: 'plazo amarillo' }, '📦 Ya está reservado en la sede. Si el beneficiario está aquí, avise a un administrador para trasladarlo a Despacho (SIVET): pulse "Ver".') : null,
+            x.estado_k === 'por_pasar' ? h('div', { class: 'plazo amarillo' }, '🏥 Administración ya fue avisada para pasarlo a Despacho.') : null,
+            x.estado_k === 'en_despacho' ? h('div', { class: 'plazo' }, '✔ Ya está en Despacho: se le puede despachar con su DUI.') : null),
           h('button', { class: 'btn-enlace', onclick: () => abrir(x.id) }, 'Ver')))));
     } catch (e) { error(e); }
   });
@@ -480,6 +497,7 @@ export async function seguimiento() {
         .in('estado', ['lista', 'avisado', 'por_pasar', 'en_despacho', 'retiro_vencido', 'aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada', 'contactado', 'evaluado', 'programada']).limit(1000)),
       esAdmin() ? rpc('traslados_pendientes_sivet') : [],
     ]);
+    const reservar = esAdmin() ? await rpc('por_reservar') : [];
     if (!esAdmin()) filas = filas.filter(s => s.asignado_a === estado.perfil.email || (!s.asignado_a && meToca(s)));
     const orden = (a, b) => (b.prioridad === 'urgente') - (a.prioridad === 'urgente') || String(a.creado_at).localeCompare(b.creado_at);
     const grupo = (titulo, ayuda, fs, extra) => fs.length ? h('section', { class: 'tarjeta' }, h('div', { class: 'botones' }, h('h2', {}, `${titulo} (${fs.length})`), h('span', { class: 'espacio' }), extra || null),
@@ -501,6 +519,13 @@ export async function seguimiento() {
           : 'Administración los pasará a Despacho y los registrará en SIVET; después podrá despacharles con su DUI.', porPasar,
         esAdmin() && pasables.length > 1 ? h('button', { class: 'btn btn-primario btn-peq', onclick: () => pasarADespacho(pasables, false, cargar) }, `Pasar las ${pasables.length} a Despacho`) : null),
       esAdmin() && sivet.length ? tarjetaSivet(sivet, cargar) : null,
+      reservar.length ? h('section', { class: 'tarjeta' },
+        h('div', { class: 'botones' }, h('h2', {}, `📥 Por reservar: está en Bodega Central y hay personas esperando (${reservar.length})`), h('span', { class: 'espacio' }),
+          h('a', { class: 'btn btn-sec btn-peq', href: '#traslados' }, '🚚 Ir a Traslados')),
+        h('p', { class: 'nota' }, 'Trasládelo a la bodega "Reservas de solicitudes" de cada sede. Al recibirlo, la solicitud queda lista y quien hace seguimiento les llama.'),
+        tabla([{ t: 'Producto', f: r => h('div', {}, h('strong', {}, r.producto), h('div', { class: 'nota' }, r.codigo || '')) }, { t: 'Sede', k: 'sede' },
+          { t: 'Personas', k: 'personas', num: true }, { t: 'Cantidad pedida', f: r => num(r.cantidad), num: true },
+          { t: 'En Bodega Central', f: r => num(r.en_central), num: true }, { t: 'Solicitudes', f: r => h('span', { class: 'nota' }, r.numeros) }], reservar)) : null,
       grupo('📦 El producto ya llegó: llame al beneficiario', 'Al registrar "Avisado" o "Contestó" empiezan a contar 7 días hábiles para retirar. Primero las urgentes y las más antiguas.', yaLlego),
       grupo('⏳ Llamados: esperando que retiren', 'Cuando llegue a retirar, pulse "Llegó a retirar" para que administración lo pase a Despacho.', avisados),
       grupo('✔ En Despacho: despachar con su DUI', 'Al despacharle con su DUI la solicitud se cierra sola.', enDespacho),
@@ -554,37 +579,6 @@ function tarjetaSivet(lista, alCambiar) {
     ], lista));
 }
 const kpi = (t, v) => h('div', { class: 'kpi' }, h('div', { class: 'kpi-titulo' }, t), h('div', { class: 'kpi-valor' }, ent(v)));
-
-// ============================================================================ tablero
-async function tablero() {
-  const hoy = new Date(); const ini = new Date(hoy.getFullYear(), hoy.getMonth() - 2, 1);
-  const iso = d => d.toISOString().slice(0, 10);
-  const desde = h('input', { class: 'campo', type: 'date', value: iso(ini) }), hasta = h('input', { class: 'campo', type: 'date', value: iso(hoy) });
-  const zona = h('div');
-  const barras = (fs, k = 'n') => { const mx = Math.max(1, ...fs.map(x => Number(x[k]))); return h('div', { class: 'barras' }, fs.map(x => h('div', { class: 'barra' },
-    h('span', { title: x.clave }, String(x.clave).slice(0, 34)), h('div', { class: 'barra-pista' }, h('div', { class: 'barra-relleno', style: { width: `${100 * x[k] / mx}%` } })),
-    h('strong', { class: 'derecha' }, ent(x[k]))))); };
-  const pintar = async () => {
-    const d = await rpc('tablero_solicitudes', { p_desde: desde.value, p_hasta: hasta.value });
-    zona.replaceChildren(
-      h('div', { class: 'rejilla' }, kpi('Solicitudes', d.total), kpi('Abiertas', d.abiertas), kpi('Urgentes abiertas', d.urgentes),
-        h('div', { class: 'kpi' }, h('div', { class: 'kpi-titulo' }, 'Días promedio'), h('div', { class: 'kpi-valor' }, `${d.dias_validar ?? '—'} / ${d.dias_cerrar ?? '—'}`),
-          h('div', { class: 'kpi-sub' }, 'para validar / para entregar'))),
-      h('div', { class: 'rejilla rejilla-graficos' },
-        h('section', { class: 'tarjeta' }, h('h2', {}, 'Por tipo'), tabla([{ t: 'Tipo', k: 'clave' }, { t: 'Total', k: 'total', num: true }, { t: 'Abiertas', k: 'abiertas', num: true }, { t: 'Atendidas', k: 'atendidas', num: true }], d.por_tipo)),
-        h('section', { class: 'tarjeta' }, h('h2', {}, 'Por estado'), barras(d.por_estado))),
-      h('div', { class: 'rejilla rejilla-graficos' },
-        h('section', { class: 'tarjeta' }, h('h2', {}, 'Medicamentos más pedidos fuera del cuadro básico'),
-          h('p', { class: 'nota' }, 'Evidencia para decidir qué agregar al catálogo.'),
-          tabla([{ t: 'Principio activo / producto', k: 'clave' }, { t: 'Solicitudes', k: 'n', num: true }, { t: 'Personas', k: 'personas', num: true }], d.fuera_catalogo, { vacio: 'Ninguno en el período' })),
-        h('section', { class: 'tarjeta' }, h('h2', {}, 'Productos del catálogo más solicitados'),
-          tabla([{ t: 'Producto', k: 'clave' }, { t: 'Tipo', k: 'tipo' }, { t: 'Solicitudes', k: 'n', num: true }, { t: 'Personas', k: 'personas', num: true }], d.mas_pedidos, { vacio: 'Ninguno en el período' }))),
-      h('section', { class: 'tarjeta' }, h('h2', {}, 'Por sede'), barras(d.por_sede)));
-  };
-  desde.onchange = hasta.onchange = () => pintar().catch(error);
-  await pintar();
-  return h('div', {}, h('section', { class: 'tarjeta' }, h('div', { class: 'filtros' }, campo('Desde', desde), campo('Hasta', hasta))), zona);
-}
 
 // ============================================================================ responsables (administración)
 async function responsables() {

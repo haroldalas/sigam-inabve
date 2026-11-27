@@ -15,6 +15,7 @@ const PESTANAS = [
   ['medicamentos', 'Medicamentos entregados', 'medicamento'],
   ['presupuesto', 'Impacto presupuestario · medicamentos', 'medicamento'],
   ['insumos', 'Impacto presupuestario · insumos', 'insumo'],
+  ['solicitudes', 'Solicitudes', 'solicitudes'],
 ];
 
 // períodos: quincena actual o anterior, mes, año o rango libre
@@ -42,6 +43,11 @@ export default async function (params) {
     if (f.periodo !== 'r') [f.desde, f.hasta] = P[f.periodo];
     zona.replaceChildren(h('p', { class: 'nota' }, 'Calculando…'));
     try {
+      if (tipoFijo === 'solicitudes') {
+        const d = await rpc('tablero_solicitudes', { p_desde: f.desde, p_hasta: f.hasta, p_sede: f.sede ? Number(f.sede) : null });
+        zona.replaceChildren(solicitudes(d, f));
+        return pintarFiltros();
+      }
       const d = await rpc('tablero_consumo', { p_desde: f.desde, p_hasta: f.hasta, p_sede: f.sede ? Number(f.sede) : null,
         p_tipo: tipoFijo || f.tipo || null, p_proveedor: f.proveedor ? Number(f.proveedor) : null });
       zona.replaceChildren(({ quincenal, medicamentos, presupuesto, insumos })[f.pestana](d, f));
@@ -57,13 +63,16 @@ export default async function (params) {
       h('label', { class: 'fila-campo' }, h('span', {}, 'Desde'), h('input', { class: 'campo', type: 'date', value: f.desde, onchange: e => { f.desde = e.target.value; pintar(); } })),
       h('label', { class: 'fila-campo' }, h('span', {}, 'Hasta'), h('input', { class: 'campo', type: 'date', value: f.hasta, onchange: e => { f.hasta = e.target.value; pintar(); } }))] : [];
     filtros.replaceChildren(
-      h('div', { class: 'pestanas' }, PESTANAS.map(([k, t]) => h('button', { class: f.pestana === k ? 'activo' : '', onclick: () => { f.pestana = k; pintar(); } }, t))),
+      h('div', { class: 'pestanas' }, PESTANAS.map(([k, t]) => h('button', { class: f.pestana === k ? 'activo' : '', onclick: () => {
+        if (k === 'solicitudes' && ['h', 'y', 'q', 'qa'].includes(f.periodo)) f.periodo = 'a';   // solicitudes: por defecto el año
+        f.pestana = k; pintar(); } }, t))),
       h('div', { class: 'filtros' },
         h('label', { class: 'fila-campo' }, h('span', {}, 'Período'), sel('periodo', [...Object.entries(P).map(([k, v]) => [k, v[2]]), ['r', 'Rango de fechas…']])),
         ...fechas,
         h('label', { class: 'fila-campo' }, h('span', {}, 'Sede'), sel('sede', [['', 'Todas'], ...estado.sedes.map(s => [s.id, s.nombre])])),
-        h('label', { class: 'fila-campo' }, h('span', {}, 'Proveedor'), sel('proveedor', [['', 'Todos'], ...proveedores.map(p => [p.id, p.nombre])])),
+        tipoFijo === 'solicitudes' ? null : h('label', { class: 'fila-campo' }, h('span', {}, 'Proveedor'), sel('proveedor', [['', 'Todos'], ...proveedores.map(p => [p.id, p.nombre])])),
         tipoFijo ? null : h('label', { class: 'fila-campo' }, h('span', {}, 'Tipo'), sel('tipo', [['', 'Medicamentos e insumos'], ['medicamento', 'Medicamentos'], ['insumo', 'Insumos médicos']]))),
+      tipoFijo === 'solicitudes' ? h('p', { class: 'nota' }, `Solicitudes registradas del ${f.desde.split('-').reverse().join('/')} al ${f.hasta.split('-').reverse().join('/')}. "Abiertas", "Por estado" y "Antigüedad" muestran lo pendiente hoy.`) :
       h('p', { class: 'nota' }, (f.periodo === 'h' ? `Hoy ${f.desde.split('-').reverse().join('/')} · se actualiza cada 2 minutos (última: ${new Date().toLocaleTimeString('es-SV', { hour: '2-digit', minute: '2-digit', hour12: false })})` : `Del ${f.desde.split('-').reverse().join('/')} al ${f.hasta.split('-').reverse().join('/')}`) + ` · despachos confirmados en SIGAM (incluye el histórico migrado de SIFAR desde julio 2026) · montos a precio de compra del lote entregado.`));
   };
 
@@ -95,13 +104,13 @@ const tituloSerie = (f, t) => unDia(f) ? `${t} por hora` : `${t} mensual`;
 const kpi = (t, v, s) => h('div', { class: 'kpi' }, h('div', { class: 'kpi-titulo' }, t), h('div', { class: 'kpi-valor' }, v), s ? h('div', { class: 'kpi-sub' }, s) : null);
 const tarjeta = (titulo, ...hijos) => h('section', { class: 'tarjeta' }, h('h2', {}, titulo), ...hijos);
 const dos = (...hijos) => h('div', { class: 'rejilla rejilla-graficos' }, ...hijos);
-const vacio = fs => !fs.length ? h('p', { class: 'nota' }, 'Sin despachos en este período.') : null;
+const vacio = fs => !fs.length ? h('p', { class: 'nota' }, 'Sin datos en este período.') : null;
 
 function barras(fs, campo = 'monto', dorado = false, fmt = dinero) {
   if (!fs.length) return vacio(fs);
   const mx = Math.max(1, ...fs.map(x => Number(x[campo])));
   return h('div', { class: 'barras' }, fs.map(x => h('div', { class: 'barra' },
-    h('span', { title: x.clave }, String(x.clave).slice(0, 30)),
+    h('span', { title: x.clave }, String(x.clave).slice(0, 40)),
     h('div', { class: 'barra-pista' }, h('div', { class: 'barra-relleno' + (dorado ? ' dorado' : ''), style: { width: `${100 * Number(x[campo]) / mx}%` } })),
     h('strong', { class: 'derecha' }, fmt(x[campo])))));
 }
@@ -133,7 +142,7 @@ function lineas(fs, series, etiqueta) {
     h('div', { class: 'leyenda' }, series.map(s => h('span', {}, h('i', { style: { background: s.c } }), s.t))));
 }
 
-function dona(fs, campo, etiqueta) {
+function dona(fs, campo, etiqueta, fmt = dinero) {
   if (!fs.length) return vacio(fs);
   const tot = fs.reduce((s, r) => s + Number(r[campo]), 0) || 1;
   const R = 70, r = 42, cx = 90, cy = 90; let a = -Math.PI / 2, out = '';
@@ -146,7 +155,7 @@ function dona(fs, campo, etiqueta) {
   });
   return h('div', { class: 'dona' }, svg(180, 180, out, etiqueta),
     h('div', { class: 'leyenda leyenda-col' }, fs.map((x, i) => h('span', {}, h('i', { style: { background: COLORES[i % 6] } }),
-      `${x.clave} · ${Math.round(100 * Number(x[campo]) / tot)} % (${dinero(x[campo])})`))));
+      `${x.clave} · ${Math.round(100 * Number(x[campo]) / tot)} % (${fmt(x[campo])})`))));
 }
 
 function dispersion(fs, etiqueta) {
@@ -256,4 +265,45 @@ function insumos(d, f) {
       h('section', { class: 'tarjeta' }, h('div', { class: 'botones' }, h('h2', {}, 'Distribución del costo por sede'), h('span', { class: 'espacio' }),
         btnExcel(nombreArchivo('presupuesto_insumos', f), [{ titulo: 'Más entregados', cols: colsProd, filas: d.top_unidades }, { titulo: 'Mayor costo', cols: colsProd, filas: d.top_monto }])),
         dona(d.por_sede, 'monto', 'Distribución del costo de insumos por sede'))));
+}
+
+// ----------------------------------------------------------------------------- 5. solicitudes
+function solicitudes(d, f) {
+  const k = (titulo, v, sub) => h('div', { class: 'kpi' }, h('div', { class: 'kpi-titulo' }, titulo), h('div', { class: 'kpi-valor' }, v), sub ? h('div', { class: 'kpi-sub' }, sub) : null);
+  const n = x => ent(x), dias = v => v == null ? '—' : `${String(v).replace('.', ',')} días`;
+  const r = d.retiro || {};
+  const tasa = r.avisados ? Math.round(100 * r.retiraron / r.avisados) + ' %' : '—';
+  const sinVacio = fs => fs.filter(x => Number(x.n) > 0);
+  const colsSol = [{ t: 'Producto', k: 'clave' }, { t: 'Solicitudes', k: 'n', num: true }, { t: 'Personas', k: 'personas', num: true }];
+  return h('div', {},
+    h('div', { class: 'rejilla' },
+      k('Solicitudes en el período', n(d.total), `${n(d.atendidas)} atendidas`),
+      k('Abiertas hoy', n(d.abiertas), `${n(d.urgentes)} urgentes`),
+      k('Tiempo promedio', dias(d.dias_cerrar), `validar: ${dias(d.dias_validar)}`),
+      k('Retiran tras la llamada', tasa, `${n(r.retiraron || 0)} de ${n(r.avisados || 0)} avisados · ${n(r.no_retiraron || 0)} no retiraron`)),
+    tarjeta(d.semanal ? 'Registradas y atendidas por semana' : 'Registradas y atendidas por mes',
+      lineas(d.serie, [{ k: 'registradas', t: 'Registradas', c: COLORES[0], fmt: ent }, { k: 'atendidas', t: 'Atendidas (entregadas u operadas)', c: COLORES[1], fmt: ent }], 'Evolución de solicitudes')),
+    dos(
+      tarjeta('Por tipo de solicitud', dona(sinVacio(d.por_tipo), 'n', 'Solicitudes por tipo', ent)),
+      tarjeta('Abiertas hoy por estado', barras(d.por_estado, 'n', false, ent))),
+    dos(
+      h('section', { class: 'tarjeta' }, h('div', { class: 'botones' }, h('h2', {}, '10 productos más solicitados'), h('span', { class: 'espacio' }),
+        btnExcel(`SIGAM_solicitudes_${f.desde}_${f.hasta}`, [{ titulo: 'Más solicitados', cols: colsSol, filas: d.mas_pedidos },
+          { titulo: 'Fuera de catálogo', cols: colsSol, filas: d.fuera_catalogo }, { titulo: 'Por tipo', cols: [{ t: 'Tipo', k: 'clave' }, { t: 'Total', k: 'n' }, { t: 'Abiertas', k: 'abiertas' }, { t: 'Atendidas', k: 'atendidas' }, { t: 'Días promedio', k: 'dias' }], filas: d.por_tipo }])),
+        barras(d.mas_pedidos, 'n', false, ent)),
+      tarjeta('Más pedidos fuera del catálogo', h('p', { class: 'nota' }, 'Evidencia para decidir qué agregar al catálogo.'), barras(d.fuera_catalogo, 'n', true, ent))),
+    dos(
+      tarjeta('Por sede', barras(d.por_sede, 'n', false, ent)),
+      tarjeta('Por sector del beneficiario', dona(d.por_sector, 'n', 'Solicitudes por sector', ent))),
+    dos(
+      tarjeta('Antigüedad de las abiertas', barras(d.antiguedad, 'n', true, ent)),
+      tarjeta('Días promedio hasta atender, por tipo', barras(d.por_tipo.filter(x => x.dias != null), 'dias', false, v => dias(v)))),
+    dos(
+      tarjeta('Por departamento', barras(d.por_departamento, 'n', false, ent)),
+      tarjeta('Por origen', dona(d.por_origen, 'n', 'Solicitudes por origen', ent))),
+    dos(
+      tarjeta('Reservas de medicamentos e insumos', barras([
+        { clave: 'Esperando que retiren', n: r.esperando || 0 }, { clave: 'Por pasar a Despacho', n: r.por_pasar || 0 },
+        { clave: 'Retiraron', n: r.retiraron || 0 }, { clave: 'No retiraron (7 días hábiles)', n: r.no_retiraron || 0 }], 'n', true, ent)),
+      tarjeta('Diagnósticos más frecuentes (cirugías, auditivos, lentes)', barras(d.diagnosticos, 'n', false, ent))));
 }

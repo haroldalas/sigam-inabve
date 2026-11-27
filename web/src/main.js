@@ -290,7 +290,7 @@ async function navegar() {
 
 export async function refrescarInsignias() {
   try {
-    rpc('mis_solicitudes_pendientes').then(r => { marcar(insigniaSol, r?.validar || 0); marcar(insigniaSeg, (r?.llamar || 0) + (r?.pasar || 0) + (r?.sivet || 0)); }).catch(() => {});
+    rpc('mis_solicitudes_pendientes').then(r => { marcar(insigniaSol, r?.validar || 0); marcar(insigniaSeg, (r?.llamar || 0) + (r?.pasar || 0) + (r?.sivet || 0) + (r?.reservar || 0)); }).catch(() => {});
     if (estado.perfil?.rol === 'jefatura') return;
     if (estado.perfil?.rol === 'consulta') {   // consulta: medicamentos nuevos de la última semana
       const nov = await rpc('novedades_medicamentos', { p_dias: 7 });
@@ -327,9 +327,9 @@ async function iniciar() {
     if (perfil.debe_cambiar_clave) return pantallaCambioClave(true);
     if (!perfil.activo || !perfil.rol) return pantallaPendiente();
     // ¿da seguimiento telefónico? administración, dependientes de regionales o responsables de Seguimiento/DSIN
-    estado.hagoSeguimiento = perfil.rol === 'administrador' || (perfil.rol === 'dependiente' && perfil.sede_id !== 1);
+    estado.hagoSeguimiento = perfil.rol === 'administrador' || !!perfil.seguimiento;
     if (!estado.hagoSeguimiento) {
-      try { estado.hagoSeguimiento = (await q(sb.from('solicitud_responsables').select('area').eq('email', perfil.email).in('area', ['SEGUIMIENTO', 'DSIN']))).length > 0; } catch { /* sin conexión */ }
+      try { estado.hagoSeguimiento = (await q(sb.from('solicitud_responsables').select('area').eq('email', perfil.email).eq('area', 'DSIN'))).length > 0; } catch { /* sin conexión */ }
     }
     await cargarCatalogosBase();
     estado.bodegas.forEach(b => { b._sede = nombreSede(b.sede_id); });
