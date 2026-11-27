@@ -77,7 +77,7 @@ with sync_playwright() as p:
     sql(f"select set_config('request.jwt.claim.sub','00000000-0000-0000-0000-000000000001',false); insert into movimientos (tipo, lote_id, producto_id, bodega_id, cantidad, documento) select 'entrada', l.id, l.producto_id, l.bodega_id, 3, 'factura' from lotes l join bodegas b on b.id=l.bodega_id where b.sede_id=3 and b.tipo='despacho_medicamentos' and l.producto_id=(select producto_id from solicitudes where dui='{DUI}' and tipo='medicamento') limit 1")
     ok(sql(f"select estado from solicitudes where dui='{DUI}' and tipo='medicamento'") == 'lista', 'quedó Lista para entregar')
     ctx = contexto(br, 'dep'); pg = ctx.new_page(); pg.on('pageerror', lambda e: errs.append(str(e)))
-    pg.goto('http://localhost:8080/#solicitudes?ver=seguimiento'); pg.wait_for_selector('.tarjeta-llamada', timeout=60000)
+    pg.goto('http://localhost:8080/#seguimiento'); pg.wait_for_selector('.tarjeta-llamada', timeout=60000)
     ok('ya llegó' in pg.inner_text('body').lower() and 'CARLOS' in pg.inner_text('.tarjetas-llamada').upper(), 'aparece en "El producto ya llegó: avise"')
     pg.screenshot(path='shots/s4_seguimiento.png', full_page=True)
     card = pg.locator('.tarjeta-llamada', has_text='CARLOS')

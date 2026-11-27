@@ -1,13 +1,15 @@
 -- Reserva para el beneficiario: al avisarle por teléfono tiene 7 días hábiles para retirar.
--- Si retira: la reserva pasa a Despacho (traslado ya recibido, pendiente de registrar en SIVET) y se despacha con su DUI.
--- Si no retira: queda "No retiró" y administración la pasa a Despacho para otro paciente.
--- JPII reserva en la Bodega Central; las regionales en su bodega "Reservas de solicitudes".
+-- Lo reservado espera en la bodega "Reservas de solicitudes" de cada sede (fuera de SIVET).
+-- Si llega a retirar: quien llama avisa a administración; solo administración lo pasa a Despacho (traslado ya recibido)
+--   y SIGAM le recuerda registrarlo en SIVET; después se despacha con su DUI y la solicitud se cierra sola.
+-- Si no retira en 7 días hábiles: queda "No retiró" y administración lo pasa a Despacho para otro paciente.
+-- Todo traslado de una bodega fuera de SIVET (Reservas, Central, Campo, Pequeña Cirugía) a Despacho/Almacén es solo de administración.
 -- Llaman: en JPII los responsables de Seguimiento telefónico; en las regionales los dependientes de la sede.
 
 -- 1. Bodegas de reservas en las regionales ----------------------------------------------------------
 insert into bodegas (codigo, nombre, sede_id, tipo)
 select x.codigo, 'Reservas de solicitudes ' || s.nombre, s.id, 'reservas'
-  from (values ('SM-RES', 2), ('SA-RES', 3), ('CH-RES', 4)) x(codigo, sede)
+  from (values ('JPII-RES', 1), ('SM-RES', 2), ('SA-RES', 3), ('CH-RES', 4)) x(codigo, sede)
   join sedes s on s.id = x.sede
 on conflict (codigo) do nothing;
 
@@ -69,10 +71,12 @@ update solicitud_tipos set estados = (
   select jsonb_agg(e order by o) from (
     select case when e->>'k' = 'avisado' then jsonb_build_object('k', 'avisado', 't', 'Llamado: esperando retiro') else e end as e, o * 10 as o
       from jsonb_array_elements(estados) with ordinality as x(e, o)
-    union all select '{"k":"en_despacho","t":"En Despacho: entregar con su DUI"}'::jsonb,
+    union all select '{"k":"por_pasar","t":"Llegó a retirar: por pasar a Despacho"}'::jsonb,
            (select o * 10 + 1 from jsonb_array_elements(estados) with ordinality as x(e, o) where e->>'k' = 'avisado')
-    union all select '{"k":"retiro_vencido","t":"No retiró: pasar a Despacho"}'::jsonb,
+    union all select '{"k":"en_despacho","t":"En Despacho: entregar con su DUI"}'::jsonb,
            (select o * 10 + 2 from jsonb_array_elements(estados) with ordinality as x(e, o) where e->>'k' = 'avisado')
+    union all select '{"k":"retiro_vencido","t":"No retiró: pasar a Despacho"}'::jsonb,
+           (select o * 10 + 3 from jsonb_array_elements(estados) with ordinality as x(e, o) where e->>'k' = 'avisado')
     union all select '{"k":"no_retirado","t":"No retiró (liberado a Despacho)","final":true}'::jsonb, 9999
   ) y)
  where clave in ('medicamento', 'insumo') and not estados @> '[{"k":"en_despacho"}]';
@@ -137,7 +141,7 @@ language plpgsql security definer set search_path = public as $$
 declare v_sede smallint; v_n int; v_ids bigint[]; r record; v_para text[] := '{}';
 begin
   if new.tipo not in ('entrada', 'traslado_recepcion') or new.cantidad <= 0 then return new; end if;
-  select sede_id into v_sede from bodegas where id = new.bodega_id and tipo in ('despacho_medicamentos', 'almacen_insumos', 'central', 'reservas');
+  select sede_id into v_sede from bodegas where id = new.bodega_id and tipo in ('despacho_medicamentos', 'almacen_insumos', 'reservas');
   if v_sede is null then return new; end if;
   with x as (
     update solicitudes set estado = 'lista', estado_at = now(), producto_disponible_at = now(), bodega_reserva_id = new.bodega_id,
@@ -202,34 +206,49 @@ begin
   end if;
 end $$;
 
--- 8. Pasar la reserva a Despacho (retira a tiempo, o no retiró) --------------------------------------------
--- Crea un traslado ya recibido desde la bodega de reserva al Despacho (o Almacén de insumos) de la sede.
--- Queda pendiente de registrar en SIVET (Traslados → Excel para SIVET).
+-- 8. Llegó a retirar: quien llama avisa a administración (el plazo deja de correr) -------------------------
+create or replace function solicitar_pase_despacho(p_id bigint, p_nota text default null) returns void
+language plpgsql security definer set search_path = public as $$
+declare s solicitudes;
+begin
+  select * into s from solicitudes where id = p_id for update;
+  perform exigir(found and s.estado = 'avisado', 'Solo se avisa lo que está esperando retiro');
+  perform exigir(puede_dar_seguimiento(s.tipo, s.sede_id), 'Solo quien da seguimiento en esa sede');
+  update solicitudes set estado = 'por_pasar', estado_at = now() where id = p_id;
+  perform registrar_evento(p_id, 'estado', 'avisado', 'por_pasar', coalesce(nullif(trim(p_nota), ''), 'El beneficiario llegó a retirar'));
+  perform encolar_correo_solicitud(p_id, array(select email from perfiles where activo and rol = 'administrador'),
+    'Llegó a retirar: pasar a Despacho · ' || (select nombre from sedes where id = s.sede_id),
+    nombre_usuario(app_email()) || ' avisa que el beneficiario llegó a retirar <b>' || producto_solicitado(s) || '</b> × ' || coalesce(s.cantidad::text, '') ||
+    ' en ' || (select nombre from sedes where id = s.sede_id) || '. Páselo de Reservas a Despacho en SIGAM (Seguimiento telefónico → Por pasar a Despacho) ' ||
+    'y regístrelo en SIVET para que se le pueda despachar.' || coalesce('<br>Nota: ' || nullif(trim(p_nota), ''), ''));
+end $$;
+
+-- 9. Pasar de Reservas a Despacho: solo administración ------------------------------------------------------
+-- Crea un traslado ya recibido desde Reservas al Despacho (o Almacén de insumos) de la sede, pendiente de registrar en SIVET.
 create or replace function pasar_reserva_a_despacho(p_ids bigint[], p_nota text default null) returns jsonb
 language plpgsql security definer set search_path = public as $$
-declare g record; x record; v_dest smallint; v_tid bigint; v_num text; r record; v_lote bigint; v_hechos text[] := '{}';
+declare g record; x record; v_dest smallint; v_tid bigint; v_num text; r record; v_lote bigint; v_hechos text[] := '{}'; v_html text := '';
 begin
+  perform exigir(es_admin(), 'Solo administración pasa productos a Despacho');
   perform exigir(coalesce(array_length(p_ids, 1), 0) > 0, 'Elija al menos una solicitud');
   for x in select * from solicitudes where id = any(p_ids) for update loop
-    perform exigir(x.tipo in ('medicamento', 'insumo') and x.estado in ('avisado', 'retiro_vencido'),
-                   x.numero || ': solo se pasa a Despacho lo que está avisado o no retirado');
-    perform exigir(es_admin() or puede_dar_seguimiento(x.tipo, x.sede_id) or app_rol() = 'dependiente' and app_sede() = x.sede_id,
-                   x.numero || ': no tiene permiso en esa sede');
+    perform exigir(x.tipo in ('medicamento', 'insumo') and x.estado in ('avisado', 'por_pasar', 'retiro_vencido'),
+                   x.numero || ': solo se pasa a Despacho lo que está esperando retiro, por pasar o no retirado');
     perform exigir(x.producto_id is not null and coalesce(x.cantidad, 0) > 0, x.numero || ': falta el producto del catálogo o la cantidad');
   end loop;
 
   for g in select so.bodega_reserva_id as origen, so.sede_id, so.tipo, array_agg(so.id order by so.creado_at) as ids
              from solicitudes so join bodegas b on b.id = so.bodega_reserva_id
-            where so.id = any(p_ids) and b.tipo in ('central', 'reservas')
+            where so.id = any(p_ids) and b.tipo not in ('despacho_medicamentos', 'almacen_insumos')
             group by 1, 2, 3 loop
     select id into v_dest from bodegas where sede_id = g.sede_id and activa
        and tipo = case when g.tipo = 'medicamento' then 'despacho_medicamentos' else 'almacen_insumos' end::tipo_bodega limit 1;
     perform exigir(v_dest is not null, 'La sede no tiene bodega de despacho activa');
     v_num := siguiente_numero('traslado', 'T-');
-    insert into traslados (numero, bodega_origen_id, bodega_destino_id, observaciones, enviado_por, estado, recibido_por, recibido_at)
+    insert into traslados (numero, bodega_origen_id, bodega_destino_id, observaciones, enviado_por)
     values (v_num, g.origen, v_dest,
             'Reserva de solicitudes ' || (select string_agg(numero, ', ') from solicitudes where id = any(g.ids)) || coalesce(' · ' || nullif(trim(p_nota), ''), ''),
-            app_email(), 'enviado', null, null) returning id into v_tid;
+            app_email()) returning id into v_tid;
     for x in select * from solicitudes where id = any(g.ids) order by creado_at loop
       for r in select * from consumir_pvps(g.origen, x.producto_id, x.cantidad, null, 'traslado_envio', 'traslado', v_tid) loop
         v_lote := lote_en_bodega(r.lote_id, v_dest);
@@ -239,24 +258,91 @@ begin
       end loop;
     end loop;
     update traslados set estado = 'recibido', recibido_por = app_email(), recibido_at = now() where id = v_tid;
-    v_hechos := v_hechos || v_num;
     update solicitudes set traslado_id = v_tid where id = any(g.ids);
+    v_hechos := v_hechos || v_num;
+    v_html := v_html || '<tr><td>' || v_num || '</td><td>' || (select nombre from bodegas where id = g.origen) || '</td><td>' ||
+              (select nombre from bodegas where id = v_dest) || '</td><td>' ||
+              (select string_agg(p.nombre_comercial || ' × ' || d.cantidad_enviada, '<br>') from traslado_detalle d join productos p on p.id = d.producto_id where d.traslado_id = v_tid) ||
+              '</td></tr>';
   end loop;
 
-  -- estado: a tiempo → en Despacho (se cierra al despacharle con su DUI); vencida → no retiró (cerrada)
   for x in select * from solicitudes where id = any(p_ids) loop
-    update solicitudes set estado = case when x.estado = 'avisado' then 'en_despacho' else 'no_retirado' end,
-           estado_at = now(), cerrada_at = case when x.estado = 'avisado' then null else now() end
+    update solicitudes set estado = case when x.estado = 'retiro_vencido' then 'no_retirado' else 'en_despacho' end,
+           estado_at = now(), cerrada_at = case when x.estado = 'retiro_vencido' then now() end
      where id = x.id;
-    perform registrar_evento(x.id, 'estado', x.estado, case when x.estado = 'avisado' then 'en_despacho' else 'no_retirado' end,
-      case when x.traslado_id is null
-           then 'Ya estaba en el Despacho' else 'Pasado a Despacho con el traslado ' || (select numero from traslados where id = x.traslado_id) || ' · registrarlo en SIVET' end
+    perform registrar_evento(x.id, 'estado', x.estado, case when x.estado = 'retiro_vencido' then 'no_retirado' else 'en_despacho' end,
+      case when x.traslado_id is null then 'Ya estaba en el Despacho'
+           else 'Pasado a Despacho con el traslado ' || (select numero from traslados where id = x.traslado_id) || ' · registrarlo en SIVET' end
       || coalesce(' · ' || nullif(trim(p_nota), ''), ''));
+    if x.estado <> 'retiro_vencido' then   -- avisar a quien llama que ya puede despacharle
+      perform encolar_correo_solicitud(x.id, seguimiento_de(x.tipo, x.sede_id) || x.creado_por, 'Ya está en Despacho: despachar con su DUI',
+        'El producto del beneficiario ya está en el Despacho de ' || (select nombre from sedes where id = x.sede_id) || '. Despáchele con su DUI; la solicitud se cerrará sola.');
+    end if;
   end loop;
+  if v_html <> '' then
+    perform encolar_correo_solicitud(p_ids[1], array(select email from perfiles where activo and rol = 'administrador'),
+      'Registrar en SIVET: ' || array_length(v_hechos, 1) || ' traslado(s) de Reservas a Despacho',
+      'Se pasaron productos de Reservas a Despacho en SIGAM. Regístrelos en SIVET y márquelos como registrados en Seguimiento telefónico → Pendiente de registrar en SIVET.' ||
+      '<table style="border-collapse:collapse;margin-top:10px;font-size:13px" border="1" cellpadding="4"><tr><th>Traslado</th><th>De</th><th>A</th><th>Productos</th></tr>' ||
+      v_html || '</table>');
+  end if;
   return jsonb_build_object('traslados', to_jsonb(v_hechos));
 end $$;
 
--- 9. Vencimiento diario: 7 días hábiles sin retirar → avisar a administración -----------------------------
+-- traslados que entraron a Despacho/Almacén desde una bodega fuera de SIVET y aún no se registran en SIVET
+create or replace function traslados_pendientes_sivet() returns jsonb
+language sql stable security definer set search_path = public as $$
+  select coalesce(jsonb_agg(x order by x.recibido_at), '[]') from (
+    select t.id, t.numero, t.recibido_at, t.observaciones, bo.nombre as origen, bd.nombre as destino, se.nombre as sede,
+           (select jsonb_agg(jsonb_build_object('codigo', p.codigo, 'producto', p.nombre_comercial, 'cantidad', d.cantidad_recibida, 'lote', l.numero_lote))
+              from traslado_detalle d join productos p on p.id = d.producto_id left join lotes l on l.id = d.lote_destino_id where d.traslado_id = t.id) as lineas
+      from traslados t join bodegas bo on bo.id = t.bodega_origen_id join bodegas bd on bd.id = t.bodega_destino_id join sedes se on se.id = bd.sede_id
+     where es_admin() and not t.enviado_sivet and t.estado in ('recibido', 'con_diferencias', 'cerrado')
+       and bo.tipo not in ('despacho_medicamentos', 'almacen_insumos') and bd.tipo in ('despacho_medicamentos', 'almacen_insumos')
+       and t.sifar_id is null) x
+$$;
+
+create or replace function marcar_registrado_sivet(p_traslado bigint) returns void
+language plpgsql security definer set search_path = public as $$
+begin
+  perform exigir(es_admin(), 'Solo administración');
+  update traslados set enviado_sivet = true where id = p_traslado;
+end $$;
+
+-- traslados desde fuera de SIVET hacia Despacho/Almacén: solo administración
+create or replace function crear_traslado(p jsonb) returns jsonb
+language plpgsql security definer set search_path = public as $$
+declare
+  o bodegas; d bodegas; v_id bigint; v_num text; ln jsonb; r record; n int := 0;
+begin
+  select * into o from bodegas where id = (p->>'bodega_origen_id')::smallint;
+  select * into d from bodegas where id = (p->>'bodega_destino_id')::smallint;
+  perform exigir(o.id is not null and d.id is not null and o.id <> d.id, 'Origen y destino deben ser bodegas distintas');
+  perform exigir(d.activa, 'La bodega de destino está inactiva');
+  perform exigir(puede_operar_bodega(o.id) or (o.solo_admin and es_admin()), 'No tiene permiso sobre la bodega de origen');
+  perform exigir(not (o.solo_admin or d.solo_admin) or es_admin(),
+                 'Solo un administrador puede trasladar desde o hacia la bodega de descarte');
+  perform exigir(es_admin() or d.tipo not in ('despacho_medicamentos', 'almacen_insumos') or o.tipo in ('despacho_medicamentos', 'almacen_insumos'),
+                 'Solo administración traslada a Despacho de medicamentos o Almacén de insumos (debe registrarse en SIVET)');
+  perform exigir(jsonb_array_length(coalesce(p->'lineas','[]')) > 0, 'El traslado no tiene productos');
+
+  v_num := siguiente_numero('traslado', 'T-');
+  insert into traslados(numero, bodega_origen_id, bodega_destino_id, observaciones, enviado_por)
+  values (v_num, o.id, d.id, p->>'observaciones', app_email()) returning id into v_id;
+
+  for ln in select * from jsonb_array_elements(p->'lineas') loop
+    n := n + 1;
+    perform exigir(nullif(ln->>'cantidad','')::numeric > 0, 'Línea ' || n || ': cantidad inválida');
+    for r in select * from consumir_pvps(o.id, (ln->>'producto_id')::bigint, (ln->>'cantidad')::numeric,
+                                         nullif(ln->>'lote_id','')::bigint, 'traslado_envio', 'traslado', v_id) loop
+      insert into traslado_detalle(traslado_id, producto_id, lote_origen_id, cantidad_enviada)
+      values (v_id, (ln->>'producto_id')::bigint, r.lote_id, r.cantidad);
+    end loop;
+  end loop;
+  return jsonb_build_object('traslado_id', v_id, 'numero', v_num);
+end $$;
+
+-- 10. Vencimiento diario: 7 días hábiles sin retirar → avisar a administración -----------------------------
 create or replace function vencer_reservas() returns int
 language plpgsql security definer set search_path = public as $$
 declare v_ids bigint[]; v_n int; v_hoy date := (now() at time zone 'America/El_Salvador')::date; v_html text;
@@ -279,13 +365,13 @@ begin
   perform encolar_correo_solicitud(v_ids[1], array(select email from perfiles where activo and rol = 'administrador'),
     v_n || ' reserva(s) no retirada(s): pasar a Despacho y registrar en SIVET',
     'Estas reservas cumplieron 7 días hábiles desde la llamada y el beneficiario no las retiró. ' ||
-    'Páselas a Despacho en SIGAM (Solicitudes → Seguimiento telefónico → No retiró) y registre el traslado en SIVET.' ||
+    'Páselas a Despacho en SIGAM (Seguimiento telefónico → Por pasar a Despacho) y registre el traslado en SIVET.' ||
     '<table style="border-collapse:collapse;margin-top:10px;font-size:13px" border="1" cellpadding="4">' ||
     '<tr><th>Solicitud</th><th>Sede</th><th>Producto</th><th>Cant.</th><th>Está en</th><th>Límite</th></tr>' || v_html || '</table>');
   return v_n;
 end $$;
 
--- 10. Insignia: lo que me toca (incluye llamadas por sede y reservas vencidas para administración) ----------
+-- 11. Insignias: solicitudes por validar · seguimiento (llamadas, por pasar, por registrar en SIVET) ----------
 create or replace function mis_solicitudes_pendientes() returns jsonb
 language sql stable security definer set search_path = public as $$
   select jsonb_build_object(
@@ -293,20 +379,21 @@ language sql stable security definer set search_path = public as $$
                    and (es_admin() and not exists (select 1 from solicitud_responsables where tipo = s.tipo and area = s.area)
                         or es_responsable(s.tipo, s.area))),
     'llamar', (select count(*) from solicitudes s where s.cerrada_at is null
-                  and (s.estado = 'lista' or s.proximo_contacto <= current_date)
+                  and (s.estado = 'lista' or s.proximo_contacto <= current_date and s.estado not in ('avisado', 'por_pasar', 'en_despacho', 'retiro_vencido'))
                   and (s.asignado_a = app_email()
                        or s.asignado_a is null and not es_admin()
                           and (s.sede_id = 1 and es_responsable(s.tipo, 'SEGUIMIENTO')
                                or s.sede_id <> 1 and s.tipo in ('medicamento', 'insumo') and app_rol() = 'dependiente' and app_sede() = s.sede_id))),
-    'vencidas', (select count(*) from solicitudes s where s.estado = 'retiro_vencido'
-                    and (es_admin() or puede_dar_seguimiento(s.tipo, s.sede_id))))
+    'pasar', (select count(*) from solicitudes s where es_admin() and s.estado in ('por_pasar', 'retiro_vencido')),
+    'sivet', (select jsonb_array_length(traslados_pendientes_sivet())))
 $$;
 
-grant execute on function pasar_reserva_a_despacho(bigint[], text), dias_habiles_restantes(date), sumar_dias_habiles(date, int),
+grant execute on function pasar_reserva_a_despacho(bigint[], text), solicitar_pase_despacho(bigint, text),
+  traslados_pendientes_sivet(), marcar_registrado_sivet(bigint), dias_habiles_restantes(date), sumar_dias_habiles(date, int),
   es_dia_habil(date), puede_dar_seguimiento(text, smallint), puede_ver_solicitud(text, text, smallint) to authenticated;
 revoke execute on function vencer_reservas() from public, anon, authenticated;
 
--- 11. Tarea diaria (lunes a viernes, 6:10 a. m. de El Salvador = 12:10 UTC) --------------------------------
+-- 12. Tarea diaria (lunes a viernes, 6:10 a. m. de El Salvador = 12:10 UTC) --------------------------------
 do $$ begin
   if exists (select 1 from pg_extension where extname = 'pg_cron') then
     perform cron.unschedule(jobid) from cron.job where jobname = 'sigam-vencer-reservas';
@@ -314,7 +401,7 @@ do $$ begin
   end if;
 end $$;
 
--- 12. JPII: Wendy Hernández llama por los medicamentos -----------------------------------------------------
+-- 13. JPII: Wendy Hernández llama por los medicamentos -----------------------------------------------------
 insert into solicitud_responsables (tipo, area, email)
 select 'medicamento', 'SEGUIMIENTO', 'wendy.hernandez@inabve.gob.sv'
  where exists (select 1 from perfiles where email = 'wendy.hernandez@inabve.gob.sv')

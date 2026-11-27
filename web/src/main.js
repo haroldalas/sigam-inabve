@@ -12,6 +12,7 @@ const RUTAS = {
   inicio:       { t: 'Notificaciones',       i: '🔔', roles: ['administrador', 'dependiente'], v: () => import('./vistas/notificaciones.js') },
   novedades:    { t: 'Medicamentos nuevos',  i: '🆕', roles: ['consulta'], v: () => import('./vistas/novedades.js') },
   solicitudes:  { t: 'Solicitudes',          i: '📨', roles: ['administrador', 'dependiente', 'consulta', 'jefatura'], v: () => import('./vistas/solicitudes.js') },
+  seguimiento:  { t: 'Seguimiento telefónico', i: '📞', roles: ['administrador', 'dependiente', 'consulta', 'jefatura'], si: () => estado.hagoSeguimiento, v: () => import('./vistas/seguimiento.js') },
   existencias:  { t: 'Existencias',          i: '📦', roles: ['administrador', 'dependiente', 'consulta', 'jefatura'], v: () => import('./vistas/existencias.js') },
   despacho:     { t: 'Despacho',             i: '🧾', roles: ['administrador', 'dependiente'], v: () => import('./vistas/despacho.js') },
   recepcion:    { t: 'Recibir traslados',    i: '📥', roles: ['administrador', 'dependiente'], v: () => import('./vistas/recepcion.js') },
@@ -30,7 +31,7 @@ const RUTAS = {
   admin:        { t: 'Administración',       i: '⚙️', roles: ['administrador'], v: () => import('./vistas/admin.js') },
 };
 const GRUPOS = [
-  ['General', ['inicio', 'novedades', 'solicitudes', 'existencias']],
+  ['General', ['inicio', 'novedades', 'solicitudes', 'seguimiento', 'existencias']],
   ['Operación', ['despacho', 'recepcion', 'traslados', 'entradas']],
   ['Inventario', ['conteo', 'ajustes', 'devoluciones', 'kardex']],
   ['Coordinación', ['pendientes', 'lotes', 'tablero', 'polizas', 'conciliacion', 'liquidacion', 'admin']],
@@ -49,6 +50,7 @@ const rutaInicial = () => ['inicio', 'novedades', 'tablero', 'existencias'].find
 function rutaPermitida(clave) {
   const r = RUTAS[clave];
   if (!r || !r.roles.includes(estado.perfil?.rol)) return false;
+  if (r.si && !r.si()) return false;
   if (r.central && !esAdmin()) {   // entradas: solo quien opera la sede de la bodega central
     const central = estado.bodegas.find(b => b.permite_entradas);
     return central && central.sede_id === estado.perfil.sede_id;
@@ -227,7 +229,7 @@ async function pantallaPendiente() {
 }
 
 // ----------------------------------------------------------------------------- estructura
-let contenido, insigniaNotif, insigniaCola, insigniaPend, insigniaRecep, insigniaAdmin, insigniaSol, solicitudesVistas = -1;
+let contenido, insigniaNotif, insigniaCola, insigniaPend, insigniaRecep, insigniaAdmin, insigniaSol, insigniaSeg, solicitudesVistas = -1;
 
 function armarEstructura() {
   const p = estado.perfil;
@@ -241,7 +243,8 @@ function armarEstructura() {
         items.map(k => h('a', { href: '#' + k, class: 'menu-item', 'data-ruta': k },
           h('span', { class: 'menu-icono', 'aria-hidden': 'true' }, RUTAS[k].i), h('span', {}, RUTAS[k].t),
           k === 'inicio' || k === 'novedades' ? (insigniaNotif = h('span', { class: 'insignia oculto' })) : null,
-          k === 'solicitudes' ? (insigniaSol = h('span', { class: 'insignia oculto', title: 'Solicitudes por validar o llamadas pendientes' })) : null,
+          k === 'solicitudes' ? (insigniaSol = h('span', { class: 'insignia oculto', title: 'Solicitudes por validar' })) : null,
+          k === 'seguimiento' ? (insigniaSeg = h('span', { class: 'insignia oculto', title: 'Llamadas, pases a Despacho y registros en SIVET pendientes' })) : null,
           k === 'pendientes' ? (insigniaPend = h('span', { class: 'insignia oculto' })) : null,
           k === 'admin' ? (insigniaAdmin = h('span', { class: 'insignia oculto', title: 'Solicitudes de acceso por revisar' })) : null,
           k === 'recepcion' ? (insigniaRecep = h('span', { class: 'insignia oculto' })) : null)));
@@ -287,7 +290,7 @@ async function navegar() {
 
 export async function refrescarInsignias() {
   try {
-    rpc('mis_solicitudes_pendientes').then(r => marcar(insigniaSol, (r?.validar || 0) + (r?.llamar || 0) + (r?.vencidas || 0))).catch(() => {});
+    rpc('mis_solicitudes_pendientes').then(r => { marcar(insigniaSol, r?.validar || 0); marcar(insigniaSeg, (r?.llamar || 0) + (r?.pasar || 0) + (r?.sivet || 0)); }).catch(() => {});
     if (estado.perfil?.rol === 'jefatura') return;
     if (estado.perfil?.rol === 'consulta') {   // consulta: medicamentos nuevos de la última semana
       const nov = await rpc('novedades_medicamentos', { p_dias: 7 });
@@ -323,6 +326,11 @@ async function iniciar() {
     if (!perfil) return pantallaLogin();
     if (perfil.debe_cambiar_clave) return pantallaCambioClave(true);
     if (!perfil.activo || !perfil.rol) return pantallaPendiente();
+    // ¿da seguimiento telefónico? administración, dependientes de regionales o responsables de Seguimiento/DSIN
+    estado.hagoSeguimiento = perfil.rol === 'administrador' || (perfil.rol === 'dependiente' && perfil.sede_id !== 1);
+    if (!estado.hagoSeguimiento) {
+      try { estado.hagoSeguimiento = (await q(sb.from('solicitud_responsables').select('area').eq('email', perfil.email).in('area', ['SEGUIMIENTO', 'DSIN']))).length > 0; } catch { /* sin conexión */ }
+    }
     await cargarCatalogosBase();
     estado.bodegas.forEach(b => { b._sede = nombreSede(b.sede_id); });
     armarEstructura();

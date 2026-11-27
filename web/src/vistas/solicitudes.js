@@ -16,7 +16,7 @@ const RESULTADOS = [
 ];
 const AREA_TXT = { DSEC: 'DSEC · Seguimiento y Control en Salud', DSIN: 'DSIN · Programas de Salud Integral' };
 const CLASE_ESTADO = { registrada: 'st-warn', contactado: 'st-info', evaluado: 'st-info', aprobada: 'st-info', en_gestion: 'st-info',
-  sin_disponibilidad: 'st-danger', lista: 'st-ok', avisado: 'st-ok', en_despacho: 'st-ok', retiro_vencido: 'st-danger', no_retirado: 'st-muted', programada: 'st-info', entregada: 'st-ok', operado: 'st-ok',
+  sin_disponibilidad: 'st-danger', lista: 'st-ok', avisado: 'st-ok', por_pasar: 'st-warn', en_despacho: 'st-ok', retiro_vencido: 'st-danger', no_retirado: 'st-muted', programada: 'st-info', entregada: 'st-ok', operado: 'st-ok',
   no_procede: 'st-muted', cancelada: 'st-muted' };
 const chipEstado = s => h('span', { class: 'estado ' + (CLASE_ESTADO[s.estado] || '') }, s.estado_texto || s.estado);
 const dui4 = d => d ? '•••••' + String(d).slice(-4) : '';
@@ -29,36 +29,54 @@ const veoSeguimiento = () => esAdmin() || estado.perfil.rol === 'dependiente' ||
 // JPII: responsables de Seguimiento telefónico · regionales: dependientes de la sede (medicamentos e insumos)
 const meToca = s => soyResp(s.tipo, 'DSIN') || (s.sede_id === 1 ? soyResp(s.tipo, 'SEGUIMIENTO')
   : estado.perfil.rol === 'dependiente' && estado.perfil.sede_id === s.sede_id && ['medicamento', 'insumo'].includes(s.tipo));
-const enReserva = s => ['central', 'reservas'].includes(s.bodega_reserva_tipo);
+const enReserva = s => s.bodega_reserva_tipo && !['despacho_medicamentos', 'almacen_insumos'].includes(s.bodega_reserva_tipo);
 const textoPlazo = s => s.dias_retiro == null ? '' : s.dias_retiro > 0 ? `retira a más tardar el ${fecha(s.retiro_limite)} · quedan ${s.dias_retiro} día(s) hábil(es)`
   : s.dias_retiro === 0 ? `hoy (${fecha(s.retiro_limite)}) es el último día para retirar` : `venció el ${fecha(s.retiro_limite)}`;
+// quien llama: avisa a administración que el beneficiario llegó (solo administración pasa a Despacho)
+async function avisarLlegada(s, alTerminar) {
+  const nota = await pedirTexto('Llegó a retirar', `Se avisará a administración para que pase ${s.solicita} × ${num(s.cantidad)} de Reservas a Despacho y lo registre en SIVET. Comentario (opcional):`, { minimo: 0 });
+  if (nota === null) return;
+  try { await rpc('solicitar_pase_despacho', { p_id: s.id, p_nota: nota }); toast('Administración fue avisada por correo', 'ok', 6000); alTerminar && alTerminar(); }
+  catch (e) { error(e); }
+}
+// botón según quién: administración pasa a Despacho; quien llama avisa que llegó
+function botonPase(s, alTerminar) {
+  if (!enReserva(s)) return s.bodega_reserva ? h('span', { class: 'nota' }, 'Ya está en el Despacho: despáchele con su DUI.') : null;
+  if (esAdmin() && ['avisado', 'por_pasar', 'retiro_vencido'].includes(s.estado))
+    return h('button', { class: 'btn btn-primario btn-peq', onclick: () => pasarADespacho([s], s.estado === 'retiro_vencido', alTerminar) }, '🏥 Pasar a Despacho');
+  if (s.estado === 'avisado' && meToca(s))
+    return h('button', { class: 'btn btn-primario btn-peq', onclick: () => avisarLlegada(s, alTerminar) }, '🏥 Llegó a retirar: avisar a administración');
+  return null;
+}
 async function pasarADespacho(sols, vencidas, alTerminar) {
   const lista = sols.map(s => `${s.numero} · ${s.solicita} × ${num(s.cantidad)}`).join('\n');
-  const t = vencidas ? 'Pasar a Despacho (no retiró)' : 'Llegó a retirar: pasar a Despacho';
+  const t = vencidas ? 'Pasar a Despacho (no retiró)' : 'Pasar a Despacho';
   const txt = (vencidas ? 'Lo reservado se trasladará al Despacho para otro paciente y la solicitud se cerrará como "No retiró".'
     : 'Se trasladará de la reserva al Despacho; luego despáchele con su DUI y la solicitud se cerrará sola.') +
     '\n\nRecuerde registrar el traslado también en SIVET (aparece en Traslados → Excel para SIVET).\n\n' + lista;
   if (!await confirmar(t, txt, 'Pasar a Despacho')) return;
   try {
     const r = await rpc('pasar_reserva_a_despacho', { p_ids: sols.map(s => s.id), p_nota: vencidas ? 'No retiró en 7 días hábiles' : null });
-    toast(r.traslados.length ? `Traslado ${r.traslados.join(', ')} registrado · pendiente de registrar en SIVET` : 'Listo: ya estaba en el Despacho', 'ok', 8000);
+    toast(r.traslados.length ? `Traslado ${r.traslados.join(', ')} hecho · regístrelo en SIVET (le llegó un correo)` : 'Listo: ya estaba en el Despacho', 'ok', 8000);
     alTerminar && alTerminar();
   } catch (e) { error(e); }
 }
 const veoTablero = () => ['administrador', 'jefatura'].includes(estado.perfil.rol);
 
-export default async function (params) {
+export async function cargarContexto() {
   [TIPOS, RESP] = await Promise.all([
     q(sb.from('solicitud_tipos').select('*').order('orden')),
     q(sb.from('solicitud_responsables').select('*')),
   ]);
+}
+export default async function (params) {
+  await cargarContexto();
   const pestanas = [
     ['bandeja', '📋 Bandeja'], ['nueva', '➕ Nueva solicitud'], ['dui', '🔎 Consultar por DUI'],
-    veoSeguimiento() ? ['seguimiento', '📞 Seguimiento telefónico'] : null,
     veoTablero() ? ['tablero', '📊 Tablero'] : null,
     esAdmin() ? ['responsables', '👥 Responsables'] : null,
   ].filter(Boolean);
-  let actual = params.get('ver') || (params.get('id') ? 'bandeja' : 'bandeja');
+  let actual = pestanas.some(p => p[0] === params.get('ver')) ? params.get('ver') : 'bandeja';
   const zona = h('div');
   const barra = h('div', { class: 'pestanas' });
   const ir = async k => {
@@ -67,7 +85,7 @@ export default async function (params) {
     barra.replaceChildren(...pestanas.map(([c, t]) => h('button', { class: c === actual ? 'activo' : '', onclick: () => ir(c) }, t)));
     zona.replaceChildren(h('p', { class: 'nota' }, 'Cargando…'));
     try {
-      zona.replaceChildren(await ({ bandeja, nueva: () => nueva(ir), dui: consultaDui, seguimiento, tablero, responsables })[k]());
+      zona.replaceChildren(await ({ bandeja, nueva: () => nueva(ir), dui: consultaDui, tablero, responsables })[k]() );
     } catch (e) { zona.replaceChildren(h('div', { class: 'aviso aviso-error' }, e.message)); }
   };
   await ir(actual);
@@ -375,8 +393,9 @@ export async function abrir(id, alCambiar) {
     ['avisado', 'retiro_vencido'].includes(s.estado) ? h('div', { class: 'aviso ' + (s.estado === 'avisado' ? 'aviso-info' : 'aviso-error') },
       s.estado === 'avisado' ? `📞 Llamado el ${fechaHora(s.avisado_at)}: ${textoPlazo(s)}.` : `⏳ No retiró en 7 días hábiles (límite ${fecha(s.retiro_limite)}).`,
       s.bodega_reserva ? ` Está en: ${s.bodega_reserva}.` : '', ' ',
-      enReserva(s) && (esAdmin() || meToca(s)) ? h('button', { class: 'btn btn-primario btn-peq', onclick: () => pasarADespacho([s], s.estado === 'retiro_vencido', () => { m.cerrar(); alCambiar && alCambiar(); }) },
-        s.estado === 'avisado' ? 'Llegó a retirar: pasar a Despacho' : 'Pasar a Despacho') : null) : null,
+      botonPase(s, () => { m.cerrar(); alCambiar && alCambiar(); })) : null,
+    s.estado === 'por_pasar' ? h('div', { class: 'aviso aviso-warn' }, '🏥 Llegó a retirar: esperando que administración lo pase a Despacho y lo registre en SIVET. ',
+      esAdmin() ? botonPase(s, () => { m.cerrar(); alCambiar && alCambiar(); }) : null) : null,
     s.estado === 'en_despacho' ? h('div', { class: 'aviso aviso-ok' }, `✔ En Despacho${s.traslado_numero ? ' (traslado ' + s.traslado_numero + ', registrar en SIVET)' : ''}: despáchele con su DUI y la solicitud se cierra sola.`) : null,
     gestiona && !s.es_final ? gestion(s, hecho) : null,
     h('h3', {}, 'Historial'), historial,
@@ -451,39 +470,48 @@ async function consultaDui() {
 }
 
 // ============================================================================ seguimiento telefónico (DSIN)
-async function seguimiento() {
+export async function seguimiento() {
+  await cargarContexto();
   const hoy = new Date().toISOString().slice(0, 10);
   const raiz = h('div');
   const cargar = async () => {
-    let filas = await q(sb.from('v_solicitudes').select('*').is('cerrada_at', null)
-      .in('estado', ['lista', 'avisado', 'en_despacho', 'retiro_vencido', 'aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada', 'contactado', 'evaluado', 'programada']).limit(1000));
+    let [filas, sivet] = await Promise.all([
+      q(sb.from('v_solicitudes').select('*').is('cerrada_at', null)
+        .in('estado', ['lista', 'avisado', 'por_pasar', 'en_despacho', 'retiro_vencido', 'aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada', 'contactado', 'evaluado', 'programada']).limit(1000)),
+      esAdmin() ? rpc('traslados_pendientes_sivet') : [],
+    ]);
     if (!esAdmin()) filas = filas.filter(s => s.asignado_a === estado.perfil.email || (!s.asignado_a && meToca(s)));
     const orden = (a, b) => (b.prioridad === 'urgente') - (a.prioridad === 'urgente') || String(a.creado_at).localeCompare(b.creado_at);
     const grupo = (titulo, ayuda, fs, extra) => fs.length ? h('section', { class: 'tarjeta' }, h('div', { class: 'botones' }, h('h2', {}, `${titulo} (${fs.length})`), h('span', { class: 'espacio' }), extra || null),
       h('p', { class: 'nota' }, ayuda), h('div', { class: 'tarjetas-llamada' }, fs.map(tarjetaLlamada))) : null;
-    const vencidas = filas.filter(s => s.estado === 'retiro_vencido').sort(orden);
+    const LLAMADAS = ['lista', 'avisado', 'por_pasar', 'en_despacho', 'retiro_vencido'];
+    const porPasar = filas.filter(s => ['por_pasar', 'retiro_vencido'].includes(s.estado)).sort((a, b) => (a.estado === 'retiro_vencido') - (b.estado === 'retiro_vencido') || orden(a, b));
     const yaLlego = filas.filter(s => s.estado === 'lista').sort(orden);
     const avisados = filas.filter(s => s.estado === 'avisado').sort((a, b) => (a.dias_retiro ?? 99) - (b.dias_retiro ?? 99));
     const enDespacho = filas.filter(s => s.estado === 'en_despacho').sort(orden);
-    const hoyToca = filas.filter(s => !['lista', 'avisado', 'en_despacho', 'retiro_vencido'].includes(s.estado) && s.proximo_contacto && s.proximo_contacto <= hoy).sort(orden);
-    const sinContacto = filas.filter(s => !['lista', 'avisado', 'en_despacho', 'retiro_vencido'].includes(s.estado) && !s.proximo_contacto && !s.ultimo_contacto_at && ['aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada'].includes(s.estado)).sort(orden);
-    const vencEnReserva = vencidas.filter(enReserva);
+    const hoyToca = filas.filter(s => !LLAMADAS.includes(s.estado) && s.proximo_contacto && s.proximo_contacto <= hoy).sort(orden);
+    const sinContacto = filas.filter(s => !LLAMADAS.includes(s.estado) && !s.proximo_contacto && !s.ultimo_contacto_at && ['aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada'].includes(s.estado)).sort(orden);
+    const pasables = porPasar.filter(enReserva);
     raiz.replaceChildren(
       h('section', { class: 'tarjeta' }, h('div', { class: 'rejilla' },
-        kpi('📦 Ya llegó: llamar', yaLlego.length), kpi('⏳ Esperando retiro', avisados.length), kpi('🚫 No retiró', vencidas.length), kpi('📅 Llamar hoy', hoyToca.length))),
-      grupo('🚫 No retiró en 7 días hábiles: pasar a Despacho', 'Lo reservado pasa al Despacho para otro paciente. Después registre el traslado en SIVET (Traslados → Excel para SIVET).', vencidas,
-        vencEnReserva.length > 1 ? h('button', { class: 'btn btn-primario btn-peq', onclick: () => pasarADespacho(vencEnReserva, true, cargar) }, `Pasar las ${vencEnReserva.length} a Despacho`) : null),
+        kpi('📦 Ya llegó: llamar', yaLlego.length), kpi('⏳ Esperando retiro', avisados.length),
+        kpi('🏥 Por pasar a Despacho', porPasar.length), esAdmin() ? kpi('🔁 Por registrar en SIVET', sivet.length) : kpi('📅 Llamar hoy', hoyToca.length))),
+      grupo('🏥 Por pasar a Despacho', esAdmin()
+          ? 'Llegaron a retirar o no retiraron en 7 días hábiles. Al pasarlos se crea el traslado de Reservas a Despacho y le llega un correo para registrarlo en SIVET.'
+          : 'Administración los pasará a Despacho y los registrará en SIVET; después podrá despacharles con su DUI.', porPasar,
+        esAdmin() && pasables.length > 1 ? h('button', { class: 'btn btn-primario btn-peq', onclick: () => pasarADespacho(pasables, false, cargar) }, `Pasar las ${pasables.length} a Despacho`) : null),
+      esAdmin() && sivet.length ? tarjetaSivet(sivet, cargar) : null,
       grupo('📦 El producto ya llegó: llame al beneficiario', 'Al registrar "Avisado" o "Contestó" empiezan a contar 7 días hábiles para retirar. Primero las urgentes y las más antiguas.', yaLlego),
-      grupo('⏳ Llamados: esperando que retiren', 'Cuando llegue a retirar, pulse "Llegó a retirar: pasar a Despacho" y luego despáchele con su DUI.', avisados),
+      grupo('⏳ Llamados: esperando que retiren', 'Cuando llegue a retirar, pulse "Llegó a retirar" para que administración lo pase a Despacho.', avisados),
       grupo('✔ En Despacho: despachar con su DUI', 'Al despacharle con su DUI la solicitud se cierra sola.', enDespacho),
       grupo('📅 Toca llamar hoy', 'Llamadas programadas para hoy o atrasadas (incluye "no contestó").', hoyToca),
       grupo('🆕 Aún no se les ha llamado', 'Solicitudes en gestión sin ningún contacto registrado.', sinContacto),
-      !filas.length ? h('section', { class: 'tarjeta' }, h('p', { class: 'nota' }, 'No hay llamadas pendientes. 🎉')) : null);
+      !filas.length && !sivet.length ? h('section', { class: 'tarjeta' }, h('p', { class: 'nota' }, 'No hay llamadas pendientes. 🎉')) : null);
   };
   const tarjetaLlamada = s => {
     const nota = h('input', { class: 'campo', placeholder: 'Nota' });
     const prox = h('input', { class: 'campo', type: 'date', title: 'Volver a llamar el…' });
-    const llamar = !['en_despacho', 'retiro_vencido'].includes(s.estado);
+    const llamar = !['por_pasar', 'en_despacho', 'retiro_vencido'].includes(s.estado);
     return h('div', { class: 'tarjeta-llamada' + (s.prioridad === 'urgente' ? ' urgente' : '') + (s.estado === 'retiro_vencido' ? ' vencida' : '') },
       h('div', { class: 'tl-cab' }, h('strong', {}, s.beneficiario), s.prioridad === 'urgente' ? chip('URGENTE', 'chip-urgente') : null),
       h('div', { class: 'tl-tels' }, tel(s.telefono), tel(s.telefono2)),
@@ -491,20 +519,39 @@ async function seguimiento() {
       h('div', { class: 'nota' }, `${s.sede} · ${s.numero}` + (s.bodega_reserva ? ` · en ${s.bodega_reserva}` : '') + (s.intentos ? ` · ${s.intentos} llamada(s)` : '') +
         (s.ultimo_resultado ? ` · último: ${RESULTADOS.find(r => r[0] === s.ultimo_resultado)?.[1] || ''}` : '')),
       s.dias_retiro != null ? h('div', { class: 'plazo ' + (s.dias_retiro <= 0 ? 'rojo' : s.dias_retiro <= 2 ? 'amarillo' : '') }, '⏳ ' + textoPlazo(s)) : null,
-      s.estado === 'retiro_vencido' ? h('div', { class: 'plazo rojo' }, `🚫 Venció el ${fecha(s.retiro_limite)}`) : null,
+      s.estado === 'retiro_vencido' ? h('div', { class: 'plazo rojo' }, `🚫 No retiró · venció el ${fecha(s.retiro_limite)}`) : null,
+      s.estado === 'por_pasar' ? h('div', { class: 'plazo amarillo' }, '🏥 Llegó a retirar: por pasar a Despacho') : null,
       llamar ? h('div', { class: 'tl-form' }, nota, prox) : null,
       llamar ? h('div', { class: 'botones botones-llamada' }, RESULTADOS.map(([k, txt, cls]) => h('button', { class: 'btn btn-peq ' + cls, onclick: async e => {
         e.target.disabled = true;
         try { await rpc('registrar_llamada', { p_id: s.id, p_resultado: k, p_nota: nota.value, p_proximo: prox.value || null }); toast('Llamada registrada'); cargar(); }
         catch (err) { error(err); e.target.disabled = false; }
       } }, txt))) : null,
-      ['avisado', 'retiro_vencido'].includes(s.estado) && enReserva(s) ? h('button', { class: 'btn btn-primario', onclick: () => pasarADespacho([s], s.estado === 'retiro_vencido', cargar) },
-        s.estado === 'avisado' ? '🏥 Llegó a retirar: pasar a Despacho' : '🏥 Pasar a Despacho') : null,
-      ['avisado', 'retiro_vencido'].includes(s.estado) && !enReserva(s) && s.bodega_reserva ? h('div', { class: 'nota' }, 'Ya está en el Despacho: despáchele con su DUI.') : null,
+      ['avisado', 'por_pasar', 'retiro_vencido'].includes(s.estado) ? botonPase(s, cargar) : null,
       h('button', { class: 'btn-enlace', onclick: () => abrir(s.id, cargar) }, 'Ver detalle e historial'));
   };
   await cargar();
   return raiz;
+}
+
+// administración: traslados a Despacho que faltan registrar en SIVET
+function tarjetaSivet(lista, alCambiar) {
+  return h('section', { class: 'tarjeta tarjeta-sivet' },
+    h('div', { class: 'botones' }, h('h2', {}, `🔁 Pendiente de registrar en SIVET (${lista.length})`), h('span', { class: 'espacio' }),
+      h('button', { class: 'btn btn-sec btn-peq', onclick: () => exportarExcel('SIGAM_traslados_para_SIVET', [{ titulo: 'Para SIVET',
+        cols: [{ t: 'Traslado', k: 'numero' }, { t: 'Sede', k: 'sede' }, { t: 'De', k: 'origen' }, { t: 'A', k: 'destino' }, { t: 'Código', k: 'codigo' },
+               { t: 'Producto', k: 'producto' }, { t: 'Lote', k: 'lote' }, { t: 'Cantidad', k: 'cantidad' }],
+        filas: lista.flatMap(t => (t.lineas || []).map(l => ({ ...t, ...l }))) }]) }, '⬇ Excel')),
+    h('p', { class: 'nota' }, 'Entraron a Despacho o Almacén de insumos desde una bodega que no está en SIVET. Regístrelos en SIVET y márquelos aquí.'),
+    tabla([
+      { t: 'Traslado', f: t => h('div', {}, h('strong', {}, t.numero), h('div', { class: 'nota' }, fechaHora(t.recibido_at))) },
+      { t: 'Sede', k: 'sede' }, { t: 'De → A', f: t => `${t.origen} → ${t.destino}` },
+      { t: 'Productos', f: t => h('div', {}, (t.lineas || []).map(l => h('div', {}, `${l.codigo || ''} ${l.producto} × ${num(l.cantidad)}` + (l.lote ? ` (lote ${l.lote})` : '')))) },
+      { t: '', f: t => h('button', { class: 'btn btn-sec btn-peq', onclick: async e => {
+        e.stopPropagation();
+        try { await rpc('marcar_registrado_sivet', { p_traslado: t.id }); toast(`${t.numero} marcado como registrado en SIVET`); alCambiar(); } catch (err) { error(err); }
+      } }, '✔ Ya lo registré en SIVET') },
+    ], lista));
 }
 const kpi = (t, v) => h('div', { class: 'kpi' }, h('div', { class: 'kpi-titulo' }, t), h('div', { class: 'kpi-valor' }, ent(v)));
 
