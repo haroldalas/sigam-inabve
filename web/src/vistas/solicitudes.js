@@ -87,6 +87,7 @@ export default async function (params) {
     ['bandeja', '📋 Bandeja'], ['nueva', '➕ Nueva solicitud'], ['dui', '🔎 Consultar por DUI'],
     esAdmin() || soyResp('medicamento', 'DSIN') ? ['cefafa', '📧 CEFAFA'] : null,
     esAdmin() ? ['responsables', '👥 Responsables'] : null,
+    esAdmin() ? ['estados', '🎨 Estados'] : null,
   ].filter(Boolean);
   let actual = pestanas.some(p => p[0] === params.get('ver')) ? params.get('ver') : 'bandeja';
   const zona = h('div');
@@ -97,7 +98,7 @@ export default async function (params) {
     barra.replaceChildren(...pestanas.map(([c, t]) => h('button', { class: c === actual ? 'activo' : '', onclick: () => ir(c) }, t)));
     zona.replaceChildren(h('p', { class: 'nota' }, 'Cargando…'));
     try {
-      zona.replaceChildren(await ({ bandeja, nueva: () => nueva(ir), dui: consultaDui, responsables, cefafa })[k]());
+      zona.replaceChildren(await ({ bandeja, nueva: () => nueva(ir), dui: consultaDui, responsables, cefafa, estados: editarEstados })[k]());
     } catch (e) { zona.replaceChildren(h('div', { class: 'aviso aviso-error' }, e.message)); }
   };
   await ir(actual);
@@ -448,7 +449,7 @@ export async function abrir(id, alCambiar, cola = []) {
 // panel de gestión para responsables: estado, llamada, asignación y producto del catálogo
 function gestion(s, hecho) {
   const t = tipoDe(s.tipo);
-  const est = select(t.estados.map(e => [e.k, e.t]), s.estado);
+  const est = select(t.estados.filter(e => !e.oculto || e.k === s.estado).map(e => [e.k, e.t]), s.estado);
   const nota = h('input', { class: 'campo', placeholder: 'Comentario' });
   const responsables = [...new Set(RESP.filter(r => r.tipo === s.tipo && ['DSIN', 'SEGUIMIENTO', 'DSEC'].includes(r.area)).map(r => r.email))];
   const asig = select([['', 'Sin asignar'], ...responsables.map(e => [e, e])], s.asignado_a || '');
@@ -627,6 +628,59 @@ function tarjetaSivet(lista, alCambiar) {
     ], lista));
 }
 const kpi = (t, v) => h('div', { class: 'kpi' }, h('div', { class: 'kpi-titulo' }, t), h('div', { class: 'kpi-valor' }, ent(v)));
+
+// ============================================================================ estados (administración)
+const COLORES = [['rojo', 'Rojo'], ['amarillo', 'Amarillo'], ['azul', 'Azul'], ['morado', 'Morado'], ['verde', 'Verde'],
+  ['naranja', 'Naranja'], ['rosa', 'Rosa'], ['celeste', 'Celeste'], ['cafe', 'Café'], ['gris', 'Gris']];
+async function editarEstados() {
+  const raiz = h('div');
+  const tarjeta = tipo => {
+    let lista = tipoDe(tipo.clave).estados.map(e => ({ ...e }));
+    const caja = h('section', { class: 'tarjeta' });
+    const pintar = () => {
+      const filas = lista.map((e, i) => {
+        const chipV = h('span', { class: `estado c-${e.c}` }, e.t || '…');
+        const col = select(COLORES, e.c); col.onchange = () => { e.c = col.value; chipV.className = `estado c-${e.c}`; };
+        const nom = h('input', { class: 'campo', value: e.t, maxlength: 60, oninput: ev => { e.t = ev.target.value; chipV.textContent = e.t || '…'; } });
+        const fin = h('input', { type: 'checkbox', checked: !!e.final, disabled: !!e.s, title: e.s ? 'Estado de SIGAM: no se puede cambiar' : '', onchange: ev => { e.final = ev.target.checked; } });
+        const ocu = h('input', { type: 'checkbox', checked: !!e.oculto, onchange: ev => { e.oculto = ev.target.checked; } });
+        const mover = d => { const j = i + d; if (j < 0 || j >= lista.length) return; [lista[i], lista[j]] = [lista[j], lista[i]]; pintar(); };
+        return h('tr', {},
+          h('td', {}, h('button', { class: 'btn-x', title: 'Subir', onclick: () => mover(-1) }, '▲'), h('button', { class: 'btn-x', title: 'Bajar', onclick: () => mover(1) }, '▼')),
+          h('td', {}, nom), h('td', {}, col), h('td', {}, chipV),
+          h('td', { class: 'centro' }, fin), h('td', { class: 'centro' }, ocu),
+          h('td', {}, e.s ? h('span', { class: 'nota', title: 'Lo usa SIGAM en el flujo; puede cambiar nombre y color' }, '🔒 SIGAM')
+            : h('button', { class: 'btn-x', title: 'Eliminar', onclick: () => { lista.splice(i, 1); pintar(); } }, '🗑')));
+      });
+      caja.replaceChildren(
+        h('div', { class: 'botones' }, h('h2', {}, `${tipo.icono} ${tipo.nombre}`), h('span', { class: 'espacio' }),
+          h('button', { class: 'btn btn-sec btn-peq', onclick: () => { lista.push({ t: 'Nuevo estado', c: 'gris', final: false }); pintar(); } }, '➕ Agregar estado'),
+          h('button', { class: 'btn btn-primario btn-peq', onclick: async () => {
+            try {
+              await rpc('guardar_estados_tipo', { p_tipo: tipo.clave, p_estados: lista.map(({ k, t, c, final, oculto }) => ({ k, t: t.trim(), c, final, oculto })) });
+              await cargarContexto(); lista = tipoDe(tipo.clave).estados.map(e => ({ ...e })); pintar(); toast('Estados guardados');
+            } catch (err) { error(err); }
+          } }, 'Guardar')),
+        h('table', { class: 'tabla tabla-estados' },
+          h('thead', {}, h('tr', {}, ...['Orden', 'Nombre', 'Color', 'Vista', 'Cierra el caso', 'Ocultar de la lista', ''].map(x => h('th', {}, x)))),
+          h('tbody', {}, filas)));
+    };
+    pintar();
+    return caja;
+  };
+  const zonaT = h('div');
+  const selTipo = h('div', { class: 'tarjeta tarjeta-pestanas pestanas' });
+  const pintarTipo = clave => {
+    selTipo.replaceChildren(...TIPOS.map(x => h('button', { class: x.clave === clave ? 'activo' : '', onclick: () => pintarTipo(x.clave) }, `${x.icono} ${x.nombre}`)));
+    zonaT.replaceChildren(tarjeta(TIPOS.find(x => x.clave === clave)));
+  };
+  raiz.replaceChildren(
+    h('section', { class: 'tarjeta' }, h('h2', {}, 'Estados de las solicitudes'),
+      h('p', { class: 'nota' }, 'Cambie el nombre, el color y el orden; agregue estados propios. Los marcados 🔒 los usa SIGAM en el flujo (CEFAFA, reservas, despacho): se puede cambiar su nombre y color, pero no eliminarlos ni cambiar si cierran el caso. "Cierra el caso" deja la solicitud finalizada (gris recomendado) y avisa a quien la registró. "Ocultar" lo quita de la lista "Cambiar estado" sin borrarlo. Un estado propio solo se puede eliminar si ninguna solicitud lo tiene.')),
+    selTipo, zonaT);
+  pintarTipo(TIPOS[0].clave);
+  return raiz;
+}
 
 // ============================================================================ responsables (administración)
 async function responsables() {

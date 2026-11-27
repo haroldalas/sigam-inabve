@@ -401,3 +401,10 @@ a.tel { color: var(--azul); font-weight: 600; text-decoration: none; white-space
 .tabla-permisos td:first-child, .tabla-permisos th:first-child { text-align: left; }
 .correo-vista { border: 1px solid var(--borde); border-radius: 8px; padding: 12px; background: #fff; max-height: 55vh; overflow: auto; }
 .correo-vista table { width: 100%; }
+.estado.c-rosa { background: #fce7f3; color: #9d174d; }
+.estado.c-celeste { background: #cffafe; color: #155e75; }
+.estado.c-cafe { background: #efe4d6; color: #6b4423; }
+.tabla-estados td { vertical-align: middle; }
+.tabla-estados .campo { min-width: 240px; }
+.tabla-estados .centro { text-align: center; }
+.tabla-estados td:last-child { white-space: nowrap; }
