@@ -16,7 +16,7 @@ const RESULTADOS = [
 ];
 const AREA_TXT = { DSEC: 'DSEC · Seguimiento y Control en Salud', DSIN: 'DSIN · Programas de Salud Integral' };
 const CLASE_ESTADO = { registrada: 'st-warn', contactado: 'st-info', evaluado: 'st-info', aprobada: 'st-info', en_gestion: 'st-info',
-  sin_disponibilidad: 'st-danger', lista: 'st-ok', avisado: 'st-ok', programada: 'st-info', entregada: 'st-ok', operado: 'st-ok',
+  sin_disponibilidad: 'st-danger', lista: 'st-ok', avisado: 'st-ok', en_despacho: 'st-ok', retiro_vencido: 'st-danger', no_retirado: 'st-muted', programada: 'st-info', entregada: 'st-ok', operado: 'st-ok',
   no_procede: 'st-muted', cancelada: 'st-muted' };
 const chipEstado = s => h('span', { class: 'estado ' + (CLASE_ESTADO[s.estado] || '') }, s.estado_texto || s.estado);
 const dui4 = d => d ? '•••••' + String(d).slice(-4) : '';
@@ -25,7 +25,26 @@ const tel = t => t ? h('a', { class: 'tel', href: 'tel:' + t }, '📞 ' + t.repl
 let TIPOS = [], RESP = [];
 const tipoDe = k => TIPOS.find(t => t.clave === k) || {};
 const soyResp = (tipo, area) => RESP.some(r => r.email === estado.perfil.email && r.tipo === tipo && (!area || r.area === area));
-const veoSeguimiento = () => esAdmin() || RESP.some(r => r.email === estado.perfil.email && ['DSIN', 'SEGUIMIENTO'].includes(r.area));
+const veoSeguimiento = () => esAdmin() || estado.perfil.rol === 'dependiente' || RESP.some(r => r.email === estado.perfil.email && ['DSIN', 'SEGUIMIENTO'].includes(r.area));
+// JPII: responsables de Seguimiento telefónico · regionales: dependientes de la sede (medicamentos e insumos)
+const meToca = s => soyResp(s.tipo, 'DSIN') || (s.sede_id === 1 ? soyResp(s.tipo, 'SEGUIMIENTO')
+  : estado.perfil.rol === 'dependiente' && estado.perfil.sede_id === s.sede_id && ['medicamento', 'insumo'].includes(s.tipo));
+const enReserva = s => ['central', 'reservas'].includes(s.bodega_reserva_tipo);
+const textoPlazo = s => s.dias_retiro == null ? '' : s.dias_retiro > 0 ? `retira a más tardar el ${fecha(s.retiro_limite)} · quedan ${s.dias_retiro} día(s) hábil(es)`
+  : s.dias_retiro === 0 ? `hoy (${fecha(s.retiro_limite)}) es el último día para retirar` : `venció el ${fecha(s.retiro_limite)}`;
+async function pasarADespacho(sols, vencidas, alTerminar) {
+  const lista = sols.map(s => `${s.numero} · ${s.solicita} × ${num(s.cantidad)}`).join('\n');
+  const t = vencidas ? 'Pasar a Despacho (no retiró)' : 'Llegó a retirar: pasar a Despacho';
+  const txt = (vencidas ? 'Lo reservado se trasladará al Despacho para otro paciente y la solicitud se cerrará como "No retiró".'
+    : 'Se trasladará de la reserva al Despacho; luego despáchele con su DUI y la solicitud se cerrará sola.') +
+    '\n\nRecuerde registrar el traslado también en SIVET (aparece en Traslados → Excel para SIVET).\n\n' + lista;
+  if (!await confirmar(t, txt, 'Pasar a Despacho')) return;
+  try {
+    const r = await rpc('pasar_reserva_a_despacho', { p_ids: sols.map(s => s.id), p_nota: vencidas ? 'No retiró en 7 días hábiles' : null });
+    toast(r.traslados.length ? `Traslado ${r.traslados.join(', ')} registrado · pendiente de registrar en SIVET` : 'Listo: ya estaba en el Despacho', 'ok', 8000);
+    alTerminar && alTerminar();
+  } catch (e) { error(e); }
+}
 const veoTablero = () => ['administrador', 'jefatura'].includes(estado.perfil.rol);
 
 export default async function (params) {
@@ -259,7 +278,8 @@ async function bandeja() {
         { t: 'Solicita', f: s => h('div', {}, s.solicita, s.cantidad ? h('div', { class: 'nota' }, `${num(s.cantidad)} ${s.unidad || ''}`) : null), ord: s => s.solicita },
         { t: 'Sede', k: 'sede' },
         { t: 'Área', k: 'area' },
-        { t: 'Estado', f: s => h('div', {}, chipEstado(s), s.posicion ? h('div', { class: 'nota' }, `Lista de espera: #${s.posicion}`) : null), ord: s => s.estado_texto },
+        { t: 'Estado', f: s => h('div', {}, chipEstado(s), s.posicion ? h('div', { class: 'nota' }, `Lista de espera: #${s.posicion}`) : null,
+          s.dias_retiro != null ? h('div', { class: 'nota' }, textoPlazo(s)) : null), ord: s => s.estado_texto },
         { t: 'Días', f: s => ent(s.dias), num: true, ord: s => s.dias },
       ], fs, { alClic: s => abrir(s.id, cargar), vacio: 'No hay solicitudes con estos filtros' })));
   };
@@ -287,6 +307,8 @@ async function bandeja() {
 
 function semaforo(s) {
   if (s.es_final) return h('span', { class: 'semaforo gris', title: 'Cerrada' });
+  if (s.estado === 'retiro_vencido') return h('span', { class: 'semaforo rojo', title: 'No retiró: pasar a Despacho' });
+  if (s.dias_retiro != null) return h('span', { class: 'semaforo ' + (s.dias_retiro <= 0 ? 'rojo' : s.dias_retiro <= 2 ? 'amarillo' : 'verde'), title: textoPlazo(s) });
   const limite = ['registrada', 'contactado'].includes(s.estado) ? s.dias_validar : 15;
   const d = ['registrada', 'contactado'].includes(s.estado) ? s.dias : s.dias_estado;
   const c = d > limite ? 'rojo' : d === limite ? 'amarillo' : 'verde';
@@ -303,7 +325,7 @@ export async function abrir(id, alCambiar) {
   if (!s) return toast('No tiene acceso a esa solicitud o no existe', 'error');
   const eventos = await q(sb.from('v_solicitud_eventos').select('*').eq('solicitud_id', id).order('at'));
   const esperaDsec = s.area === 'DSEC' && !s.validado_at;   // aún no la valida el médico de DSEC
-  const gestiona = esAdmin() || (esperaDsec ? soyResp(s.tipo, 'DSEC') : soyResp(s.tipo));
+  const gestiona = esAdmin() || (esperaDsec ? soyResp(s.tipo, 'DSEC') : soyResp(s.tipo) || meToca(s));
   const valida = !s.es_final && ['registrada', 'contactado', 'evaluado'].includes(s.estado) && (esAdmin() || soyResp(s.tipo, s.area));
   let m;
   const hecho = async (msg) => { dispararCorreos(); toast(msg); m.cerrar(); alCambiar && alCambiar(); };
@@ -347,8 +369,15 @@ export async function abrir(id, alCambiar) {
         fila('Ojo / oído', s.lado), fila('Diagnóstico', s.diagnostico), fila('Justificación', s.justificacion),
         fila('Registrada', `${fechaHora(s.creado_at)} · ${s.creado_nombre || s.creado_por}`),
         fila('Validada', s.validado_at ? `${fechaHora(s.validado_at)} · ${s.validado_nombre}` : null),
-        fila('Seguimiento', s.asignado_nombre)))),
-    s.producto_disponible_at && !s.es_final ? h('div', { class: 'aviso aviso-ok' }, `📦 El producto llegó a ${s.sede} el ${fechaHora(s.producto_disponible_at)}. Avise al beneficiario.`) : null,
+        fila('Seguimiento', s.asignado_nombre),
+        fila('Puede retirar hasta', s.retiro_limite ? fecha(s.retiro_limite) : null)))),
+    s.estado === 'lista' ? h('div', { class: 'aviso aviso-ok' }, `📦 El producto llegó (${s.bodega_reserva || s.sede}) el ${fechaHora(s.producto_disponible_at)}. Llame al beneficiario: desde la llamada tiene 7 días hábiles para retirar.`) : null,
+    ['avisado', 'retiro_vencido'].includes(s.estado) ? h('div', { class: 'aviso ' + (s.estado === 'avisado' ? 'aviso-info' : 'aviso-error') },
+      s.estado === 'avisado' ? `📞 Llamado el ${fechaHora(s.avisado_at)}: ${textoPlazo(s)}.` : `⏳ No retiró en 7 días hábiles (límite ${fecha(s.retiro_limite)}).`,
+      s.bodega_reserva ? ` Está en: ${s.bodega_reserva}.` : '', ' ',
+      enReserva(s) && (esAdmin() || meToca(s)) ? h('button', { class: 'btn btn-primario btn-peq', onclick: () => pasarADespacho([s], s.estado === 'retiro_vencido', () => { m.cerrar(); alCambiar && alCambiar(); }) },
+        s.estado === 'avisado' ? 'Llegó a retirar: pasar a Despacho' : 'Pasar a Despacho') : null) : null,
+    s.estado === 'en_despacho' ? h('div', { class: 'aviso aviso-ok' }, `✔ En Despacho${s.traslado_numero ? ' (traslado ' + s.traslado_numero + ', registrar en SIVET)' : ''}: despáchele con su DUI y la solicitud se cierra sola.`) : null,
     gestiona && !s.es_final ? gestion(s, hecho) : null,
     h('h3', {}, 'Historial'), historial,
     h('div', { class: 'fila-comentario' }, (() => {
@@ -427,39 +456,51 @@ async function seguimiento() {
   const raiz = h('div');
   const cargar = async () => {
     let filas = await q(sb.from('v_solicitudes').select('*').is('cerrada_at', null)
-      .in('estado', ['lista', 'avisado', 'aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada', 'contactado', 'evaluado', 'programada']).limit(1000));
-    if (!esAdmin()) filas = filas.filter(s => s.asignado_a === estado.perfil.email || (!s.asignado_a && soyResp(s.tipo)));
-    const grupo = (titulo, ayuda, fs) => fs.length ? h('section', { class: 'tarjeta' }, h('h2', {}, `${titulo} (${fs.length})`), h('p', { class: 'nota' }, ayuda),
-      h('div', { class: 'tarjetas-llamada' }, fs.map(tarjetaLlamada))) : null;
+      .in('estado', ['lista', 'avisado', 'en_despacho', 'retiro_vencido', 'aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada', 'contactado', 'evaluado', 'programada']).limit(1000));
+    if (!esAdmin()) filas = filas.filter(s => s.asignado_a === estado.perfil.email || (!s.asignado_a && meToca(s)));
     const orden = (a, b) => (b.prioridad === 'urgente') - (a.prioridad === 'urgente') || String(a.creado_at).localeCompare(b.creado_at);
+    const grupo = (titulo, ayuda, fs, extra) => fs.length ? h('section', { class: 'tarjeta' }, h('div', { class: 'botones' }, h('h2', {}, `${titulo} (${fs.length})`), h('span', { class: 'espacio' }), extra || null),
+      h('p', { class: 'nota' }, ayuda), h('div', { class: 'tarjetas-llamada' }, fs.map(tarjetaLlamada))) : null;
+    const vencidas = filas.filter(s => s.estado === 'retiro_vencido').sort(orden);
     const yaLlego = filas.filter(s => s.estado === 'lista').sort(orden);
-    const hoyToca = filas.filter(s => s.estado !== 'lista' && s.proximo_contacto && s.proximo_contacto <= hoy).sort(orden);
-    const sinContacto = filas.filter(s => s.estado !== 'lista' && !s.proximo_contacto && !s.ultimo_contacto_at && ['aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada'].includes(s.estado)).sort(orden);
-    const avisados = filas.filter(s => s.estado === 'avisado').sort(orden);
+    const avisados = filas.filter(s => s.estado === 'avisado').sort((a, b) => (a.dias_retiro ?? 99) - (b.dias_retiro ?? 99));
+    const enDespacho = filas.filter(s => s.estado === 'en_despacho').sort(orden);
+    const hoyToca = filas.filter(s => !['lista', 'avisado', 'en_despacho', 'retiro_vencido'].includes(s.estado) && s.proximo_contacto && s.proximo_contacto <= hoy).sort(orden);
+    const sinContacto = filas.filter(s => !['lista', 'avisado', 'en_despacho', 'retiro_vencido'].includes(s.estado) && !s.proximo_contacto && !s.ultimo_contacto_at && ['aprobada', 'en_gestion', 'sin_disponibilidad', 'registrada'].includes(s.estado)).sort(orden);
+    const vencEnReserva = vencidas.filter(enReserva);
     raiz.replaceChildren(
       h('section', { class: 'tarjeta' }, h('div', { class: 'rejilla' },
-        kpi('📦 Ya llegó: avisar', yaLlego.length), kpi('📅 Llamar hoy', hoyToca.length), kpi('🆕 Sin contacto aún', sinContacto.length), kpi('✔ Avisados, por retirar', avisados.length))),
-      grupo('📦 El producto ya llegó: avise para que pase a retirar', 'Primero las urgentes y las más antiguas.', yaLlego),
-      grupo('📅 Toca llamar hoy', 'Llamadas programadas para hoy o atrasadas (incluye “no contestó” de ayer).', hoyToca),
+        kpi('📦 Ya llegó: llamar', yaLlego.length), kpi('⏳ Esperando retiro', avisados.length), kpi('🚫 No retiró', vencidas.length), kpi('📅 Llamar hoy', hoyToca.length))),
+      grupo('🚫 No retiró en 7 días hábiles: pasar a Despacho', 'Lo reservado pasa al Despacho para otro paciente. Después registre el traslado en SIVET (Traslados → Excel para SIVET).', vencidas,
+        vencEnReserva.length > 1 ? h('button', { class: 'btn btn-primario btn-peq', onclick: () => pasarADespacho(vencEnReserva, true, cargar) }, `Pasar las ${vencEnReserva.length} a Despacho`) : null),
+      grupo('📦 El producto ya llegó: llame al beneficiario', 'Al registrar "Avisado" o "Contestó" empiezan a contar 7 días hábiles para retirar. Primero las urgentes y las más antiguas.', yaLlego),
+      grupo('⏳ Llamados: esperando que retiren', 'Cuando llegue a retirar, pulse "Llegó a retirar: pasar a Despacho" y luego despáchele con su DUI.', avisados),
+      grupo('✔ En Despacho: despachar con su DUI', 'Al despacharle con su DUI la solicitud se cierra sola.', enDespacho),
+      grupo('📅 Toca llamar hoy', 'Llamadas programadas para hoy o atrasadas (incluye "no contestó").', hoyToca),
       grupo('🆕 Aún no se les ha llamado', 'Solicitudes en gestión sin ningún contacto registrado.', sinContacto),
-      grupo('✔ Avisados, pendientes de retirar', 'Al despacharles con su DUI, la solicitud se cierra sola.', avisados),
       !filas.length ? h('section', { class: 'tarjeta' }, h('p', { class: 'nota' }, 'No hay llamadas pendientes. 🎉')) : null);
   };
   const tarjetaLlamada = s => {
     const nota = h('input', { class: 'campo', placeholder: 'Nota' });
     const prox = h('input', { class: 'campo', type: 'date', title: 'Volver a llamar el…' });
-    return h('div', { class: 'tarjeta-llamada' + (s.prioridad === 'urgente' ? ' urgente' : '') },
+    const llamar = !['en_despacho', 'retiro_vencido'].includes(s.estado);
+    return h('div', { class: 'tarjeta-llamada' + (s.prioridad === 'urgente' ? ' urgente' : '') + (s.estado === 'retiro_vencido' ? ' vencida' : '') },
       h('div', { class: 'tl-cab' }, h('strong', {}, s.beneficiario), s.prioridad === 'urgente' ? chip('URGENTE', 'chip-urgente') : null),
       h('div', { class: 'tl-tels' }, tel(s.telefono), tel(s.telefono2)),
       h('div', {}, `${s.icono} ${s.solicita}`, s.cantidad ? ` · ${num(s.cantidad)} ${s.unidad || ''}` : ''),
-      h('div', { class: 'nota' }, `${s.sede} · ${s.numero} · esperando ${s.dias} día(s)` + (s.intentos ? ` · ${s.intentos} llamada(s)` : '') +
+      h('div', { class: 'nota' }, `${s.sede} · ${s.numero}` + (s.bodega_reserva ? ` · en ${s.bodega_reserva}` : '') + (s.intentos ? ` · ${s.intentos} llamada(s)` : '') +
         (s.ultimo_resultado ? ` · último: ${RESULTADOS.find(r => r[0] === s.ultimo_resultado)?.[1] || ''}` : '')),
-      h('div', { class: 'tl-form' }, nota, prox),
-      h('div', { class: 'botones botones-llamada' }, RESULTADOS.map(([k, txt, cls]) => h('button', { class: 'btn btn-peq ' + cls, onclick: async e => {
+      s.dias_retiro != null ? h('div', { class: 'plazo ' + (s.dias_retiro <= 0 ? 'rojo' : s.dias_retiro <= 2 ? 'amarillo' : '') }, '⏳ ' + textoPlazo(s)) : null,
+      s.estado === 'retiro_vencido' ? h('div', { class: 'plazo rojo' }, `🚫 Venció el ${fecha(s.retiro_limite)}`) : null,
+      llamar ? h('div', { class: 'tl-form' }, nota, prox) : null,
+      llamar ? h('div', { class: 'botones botones-llamada' }, RESULTADOS.map(([k, txt, cls]) => h('button', { class: 'btn btn-peq ' + cls, onclick: async e => {
         e.target.disabled = true;
-        try { await rpc('registrar_llamada', { p_id: s.id, p_resultado: k, p_nota: nota.value, p_proximo: prox.value || null }); dispararCorreos(); toast('Llamada registrada'); cargar(); }
+        try { await rpc('registrar_llamada', { p_id: s.id, p_resultado: k, p_nota: nota.value, p_proximo: prox.value || null }); toast('Llamada registrada'); cargar(); }
         catch (err) { error(err); e.target.disabled = false; }
-      } }, txt))),
+      } }, txt))) : null,
+      ['avisado', 'retiro_vencido'].includes(s.estado) && enReserva(s) ? h('button', { class: 'btn btn-primario', onclick: () => pasarADespacho([s], s.estado === 'retiro_vencido', cargar) },
+        s.estado === 'avisado' ? '🏥 Llegó a retirar: pasar a Despacho' : '🏥 Pasar a Despacho') : null,
+      ['avisado', 'retiro_vencido'].includes(s.estado) && !enReserva(s) && s.bodega_reserva ? h('div', { class: 'nota' }, 'Ya está en el Despacho: despáchele con su DUI.') : null,
       h('button', { class: 'btn-enlace', onclick: () => abrir(s.id, cargar) }, 'Ver detalle e historial'));
   };
   await cargar();
@@ -523,7 +564,26 @@ async function responsables() {
           }))))));
   };
   await pintar();
-  return raiz;
+  return h('div', {}, raiz, await feriados());
+}
+async function feriados() {
+  const caja = h('section', { class: 'tarjeta' });
+  const pintar = async () => {
+    const fs = await q(sb.from('feriados').select('*').gte('fecha', new Date().toISOString().slice(0, 10)).order('fecha'));
+    const f = h('input', { class: 'campo', type: 'date' }), n = h('input', { class: 'campo', placeholder: 'Nombre (p. ej. Vacación de fin de año)' });
+    caja.replaceChildren(h('h2', {}, 'Feriados'),
+      h('p', { class: 'nota' }, 'No cuentan para los 7 días hábiles de retiro (tampoco sábados ni domingos). Agregue vacaciones institucionales o asuetos locales.'),
+      tabla([{ t: 'Fecha', f: x => fecha(x.fecha) }, { t: 'Feriado', k: 'nombre' },
+        { t: '', f: x => h('button', { class: 'btn-x', title: 'Quitar', onclick: async e => { e.stopPropagation(); try { await q(sb.from('feriados').delete().eq('fecha', x.fecha)); pintar(); } catch (err) { error(err); } } }, '×') }],
+        fs, { vacio: 'No hay feriados registrados' }),
+      h('div', { class: 'filtros' }, campo('Fecha', f), campo('Nombre', n), h('div', { class: 'fila-campo' }, h('span', {}, '\u00a0'),
+        h('button', { class: 'btn btn-sec', onclick: async () => {
+          if (!f.value || !n.value.trim()) return toast('Indique fecha y nombre', 'error');
+          try { await q(sb.from('feriados').insert({ fecha: f.value, nombre: n.value.trim() })); pintar(); } catch (e) { error(e); }
+        } }, 'Agregar'))));
+  };
+  await pintar();
+  return caja;
 }
 const reglaTipo = k => ({
   medicamento: 'Primera vez → DSEC (valida un médico); pendiente de entrega → DSIN. Lo aprobado por DSEC pasa a DSIN.',

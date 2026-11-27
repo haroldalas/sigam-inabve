@@ -383,3 +383,7 @@ a.tel { color: var(--azul); font-weight: 600; text-decoration: none; white-space
 .tabla-resp td { vertical-align: top; min-width: 180px; }
 .tabla-resp select { margin-top: 4px; max-width: 220px; }
 @media (max-width: 560px) { .tl-form { grid-template-columns: 1fr; } .consulta-sol { grid-template-columns: 32px 1fr; } }
+.plazo { font-weight: 600; color: var(--info); background: var(--info-f); border-radius: 6px; padding: 4px 8px; font-size: .88rem; }
+.plazo.amarillo { color: var(--warn); background: var(--warn-f); }
+.plazo.rojo { color: var(--danger); background: var(--danger-f); }
+.tarjeta-llamada.vencida { border-left: 4px solid var(--danger); }

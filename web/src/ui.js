@@ -66,7 +66,7 @@ export const ESTADOS = {
 export const estadoChip = (e, alt) => { const [t, c] = ESTADOS[alt || e] || [e, '']; return h('span', { class: 'estado ' + c }, t); };
 export const TIPO_BODEGA = {
   central: 'Bodega central', despacho_medicamentos: 'Despacho de medicamentos', almacen_insumos: 'Almacén de insumos médicos',
-  pequena_cirugia: 'Pequeña cirugía', campo: 'Campo', descarte: 'Descarte',
+  pequena_cirugia: 'Pequeña cirugía', campo: 'Campo', reservas: 'Reservas de solicitudes', descarte: 'Descarte',
 };
 
 // ---------------------------------------------------------------- avisos
@@ -102,7 +102,7 @@ export function modal(titulo, contenido, { acciones = [], ancho = '640px', alCer
 
 export function confirmar(titulo, mensaje, textoOk = 'Confirmar', clase = 'btn-primario') {
   return new Promise(res => {
-    const m = modal(titulo, h('p', {}, mensaje), {
+    const m = modal(titulo, h('p', { style: { whiteSpace: 'pre-line' } }, mensaje), {
       acciones: [{ texto: 'Cancelar', clase: 'btn-sec', accion: () => res(false) }, { texto: textoOk, clase, accion: () => res(true) }],
       alCerrar: () => res(false),
     });

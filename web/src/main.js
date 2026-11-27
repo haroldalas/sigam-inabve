@@ -287,7 +287,7 @@ async function navegar() {
 
 export async function refrescarInsignias() {
   try {
-    rpc('mis_solicitudes_pendientes').then(r => marcar(insigniaSol, (r?.validar || 0) + (r?.llamar || 0))).catch(() => {});
+    rpc('mis_solicitudes_pendientes').then(r => marcar(insigniaSol, (r?.validar || 0) + (r?.llamar || 0) + (r?.vencidas || 0))).catch(() => {});
     if (estado.perfil?.rol === 'jefatura') return;
     if (estado.perfil?.rol === 'consulta') {   // consulta: medicamentos nuevos de la última semana
       const nov = await rpc('novedades_medicamentos', { p_dias: 7 });

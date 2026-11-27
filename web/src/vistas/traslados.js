@@ -23,7 +23,7 @@ function porSede(otras, origenId, destinoId) {
   const bod = id => estado.bodegas.find(b => b.id === id);
   const sedeDe = id => bod(id)?.sede_id;
   const filas = estado.sedes.map(s => {
-    const xs = otras.filter(o => sedeDe(o.bodega_id) === s.id && bod(o.bodega_id)?.tipo !== 'descarte');
+    const xs = otras.filter(o => sedeDe(o.bodega_id) === s.id && !['descarte', 'reservas'].includes(bod(o.bodega_id)?.tipo));
     const sum = k => xs.reduce((a, o) => a + Number(o[k] || 0), 0);
     const central = xs.filter(o => bod(o.bodega_id)?.tipo === 'central').reduce((a, o) => a + Number(o.disponible || 0), 0);
     const disp = sum('disponible'), cons = sum('consumo_30d');

@@ -87,7 +87,7 @@ with sync_playwright() as p:
     print('6. Consulta por DUI')
     pg.goto('http://localhost:8080/#solicitudes?ver=dui'); pg.wait_for_selector('.dui-grande', timeout=30000)
     pg.fill('.dui-grande', DUI); pg.wait_for_selector('.consulta-sol', timeout=15000)
-    ok('Beneficiario avisado' in pg.inner_text('.lista-consulta'), 'muestra el estado: ' + pg.inner_text('.consulta-sol >> nth=0').split('\n')[1][:60])
+    ok('Llamado: esperando retiro' in pg.inner_text('.lista-consulta'), 'muestra el estado: ' + pg.inner_text('.consulta-sol >> nth=0').split('\n')[1][:60])
     pg.screenshot(path='shots/s5_consulta.png', full_page=True)
     ctx.close()
 

@@ -10,7 +10,7 @@ import { excelSalidasDia } from '../reportes.js';
 const MODO_KEY = 'sigam:modo_escaneo';
 
 export default async function () {
-  const bodegas = bodegasOperables().filter(b => b.tipo !== 'descarte');
+  const bodegas = bodegasOperables().filter(b => !['descarte', 'reservas'].includes(b.tipo));
   if (!bodegas.length) return h('p', { class: 'aviso aviso-info' }, 'No tiene bodegas asignadas para despachar.');
   const st = {
     bodega: Number(localStorage.getItem('sigam:bodega_despacho')) || bodegas.find(b => b.tipo === 'despacho_medicamentos')?.id || bodegas[0].id,
