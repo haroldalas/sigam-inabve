@@ -395,9 +395,10 @@ export async function abrir(id, alCambiar, cola = []) {
       const motivo = await pedirTexto('No aplica', 'Motivo (le llegará por correo a quien la registró)'); if (!motivo) return false;
       await rpc('validar_solicitud', { p_id: id, p_aprobar: false, p_nota: motivo }); hecho('Solicitud marcada como no aplica', true);
     } });
-    acciones.push({ texto: txtOk + (sig ? ' y siguiente' : ''), clase: 'btn-primario', accion: async () => {
-      if (s.tipo === 'medicamento' && s.area === 'DSIN' && !s.producto_id && !await confirmar('Sin producto definido',
-        'Aún no eligió el producto del catálogo (el que enviará CEFAFA). Sin producto, SIGAM no podrá avisar cuando llegue. ¿Validar de todos modos?', 'Validar')) return false;
+    if (s.tipo === 'medicamento' && s.area === 'DSIN') acciones.push({ texto: '📧 Ir a CEFAFA', clase: 'btn-primario', accion: async () => {
+      m.cerrar(); location.hash = '#solicitudes?ver=cefafa'; return false;
+    } });
+    else acciones.push({ texto: txtOk + (sig ? ' y siguiente' : ''), clase: 'btn-primario', accion: async () => {
       const nota = await pedirTexto('Validar solicitud', s.area === 'DSEC' ? 'Comentario (con la aprobación de DSEC finaliza la gestión)' : 'Comentario (opcional)', { minimo: 0 });
       if (nota === null) return false;
       await rpc('validar_solicitud', { p_id: id, p_aprobar: true, p_nota: nota }); hecho('Solicitud validada · se avisó por correo', true);
@@ -673,60 +674,127 @@ async function feriados() {
   await pintar();
   return caja;
 }
-// ============================================================================ CEFAFA: consulta periódica y respuesta
+// ============================================================================ CEFAFA: redactar la solicitud y registrar la respuesta
+// SIGAM no envía a CEFAFA: redacta el correo, la jefatura lo envía desde su cuenta, y lo incluido pasa a "Ya gestionado con CEFAFA".
+const escHtml = x => String(x ?? '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' })[c]);
+function correoCefafa(items) {
+  const hoy = new Date().toLocaleDateString('es-SV', { day: '2-digit', month: '2-digit', year: 'numeric' });
+  const asunto = `INABVE · Solicitud de medicamentos · ${hoy}`;
+  const intro = 'Estimados señores de CEFAFA:\n\nPor medio del presente les solicitamos los siguientes medicamentos, pendientes de entregar a beneficiarios del INABVE. ' +
+    'Agradeceremos confirmar por cada uno si hay disponibilidad, si no hay, o si cuentan con un producto alterno con el mismo principio activo (indicar nombre comercial).';
+  const cierre = 'Quedamos atentos a su respuesta.\n\nSaludos cordiales.';
+  const cols = ['#', 'Código', 'Medicamento', 'Principio activo', 'Presentación', 'Cantidad', 'Sede(s)'];
+  const filas = items.map((x, i) => [i + 1, x.codigo || '—', x.producto, x.principio_activo || '—', x.presentacion || '—', Number(x.cantidad).toLocaleString('es-SV'), x.sedes || '']);
+  const texto = `Asunto: ${asunto}\n\n${intro}\n\n` + [cols, ...filas].map(f => f.join('\t')).join('\n') + `\n\n${cierre}`;
+  const html = `<div style="font-family:Calibri,Arial,sans-serif;font-size:11pt"><p>${intro.split('\n\n').map(escHtml).join('</p><p>')}</p>` +
+    `<table border="1" cellpadding="4" style="border-collapse:collapse;font-size:10pt"><tr style="background:#eef1f6">${cols.map(c => `<th>${c}</th>`).join('')}</tr>` +
+    filas.map(f => `<tr>${f.map((c, k) => `<td${k === 5 ? ' style="text-align:right"' : ''}>${escHtml(c)}</td>`).join('')}</tr>`).join('') +
+    `</table><p>${cierre.split('\n\n').map(escHtml).join('</p><p>')}</p></div>`;
+  return { asunto, texto, html };
+}
+async function copiarCorreo(c) {
+  try {
+    if (window.ClipboardItem) await navigator.clipboard.write([new ClipboardItem({ 'text/html': new Blob([c.html], { type: 'text/html' }), 'text/plain': new Blob([c.texto], { type: 'text/plain' }) })]);
+    else await navigator.clipboard.writeText(c.texto);
+    return true;
+  } catch {
+    const ta = h('textarea', { style: { position: 'fixed', opacity: 0 } }, c.texto); document.body.append(ta); ta.select();
+    const ok = document.execCommand('copy'); ta.remove(); return ok;
+  }
+}
 async function cefafa() {
   const raiz = h('div');
+  let incluirSinDisp = false;
   const pintar = async () => {
-    const [[c], items] = await Promise.all([q(sb.from('cefafa_config').select('*')), rpc('resumen_cefafa')]);
-    const dest = h('input', { class: 'campo', value: (c.destinatarios || []).join(', '), placeholder: 'correo@cefafa…, otro@cefafa…' });
-    const copia = h('input', { class: 'campo', value: (c.copia || []).join(', '), placeholder: 'Copia (opcional)' });
+    const [[c], porSolicitar, gestionados] = await Promise.all([q(sb.from('cefafa_config').select('*')),
+      rpc('resumen_cefafa', { p_grupo: 'solicitar', p_incluir_sin_disp: incluirSinDisp }), rpc('resumen_cefafa', { p_grupo: 'respuesta' })]);
+    const sel = new Set(porSolicitar.map(x => x.clave));
+    const contador = h('strong', {});
+    const actualizar = () => { contador.textContent = `${sel.size} de ${porSolicitar.length} seleccionado(s)`; };
+    const casilla = it => h('input', { type: 'checkbox', checked: sel.has(it.clave), onclick: e => e.stopPropagation(),
+      onchange: e => { e.target.checked ? sel.add(it.clave) : sel.delete(it.clave); actualizar(); } });
+    const redactar = () => {
+      const elegidos = porSolicitar.filter(x => sel.has(x.clave));
+      if (!elegidos.length) return toast('Seleccione al menos un medicamento', 'error');
+      const correo = correoCefafa(elegidos);
+      const ids = elegidos.flatMap(x => x.ids);
+      const vista = h('div', { class: 'correo-vista' }); vista.innerHTML = correo.html;
+      let mm;
+      const marcar = async () => {
+        const n = await rpc('marcar_gestionado_cefafa', { p_ids: ids });
+        toast(`${n} solicitud(es) en "Ya gestionado con CEFAFA"`, 'ok', 6000); mm.cerrar(); pintar();
+      };
+      mm = modal('Correo para CEFAFA (lo envía la jefatura)', h('div', {},
+        h('p', {}, h('strong', {}, 'Asunto: '), correo.asunto),
+        h('p', { class: 'nota' }, 'Pulse "Copiar" y péguelo en un correo nuevo desde la cuenta de la jefatura. La tabla se pega con formato en Outlook o Gmail. No incluye datos de beneficiarios.'),
+        vista), { ancho: '900px', acciones: [
+          { texto: '📋 Solo copiar', clase: 'btn-sec', accion: async () => { toast(await copiarCorreo(correo) ? 'Correo copiado' : 'No se pudo copiar: selecciónelo y cópielo a mano', 'ok'); return false; } },
+          { texto: `📋 Copiar y marcar ${ids.length} como "Ya gestionado con CEFAFA"`, clase: 'btn-primario', accion: async () => {
+            if (!await copiarCorreo(correo)) toast('No se pudo copiar automáticamente: selecciónelo y cópielo a mano', 'error');
+            try { await marcar(); } catch (e) { error(e); } return false;
+          } }] });
+    };
     const frec = select([['7', 'Cada semana'], ['15', 'Cada 15 días'], ['30', 'Cada mes']], String(c.frecuencia_dias));
     const prox = h('input', { class: 'campo', type: 'date', value: c.proximo_envio || '' });
     const activo = h('input', { type: 'checkbox', checked: c.activo });
+    const chkSin = h('input', { type: 'checkbox', checked: incluirSinDisp, onchange: e => { incluirSinDisp = e.target.checked; pintar(); } });
     const responder = async (it, respuesta) => {
-      let producto = null, nota = null;
+      let producto = null;
       if (respuesta === 'alterno') {
         producto = await new Promise(res => { const mm = modal('Producto alterno que ofrece CEFAFA', h('div', {},
           h('p', { class: 'nota' }, `Para: ${it.producto} (${it.principio_activo || 'sin principio activo'}). Si no está en el catálogo, agréguelo desde la solicitud.`),
           buscadorProducto({ filtro: p => p.tipo === 'medicamento', alElegir: p => { mm.cerrar(); res(p.id); } })), { alCerrar: () => res(null) }); });
         if (!producto) return;
       }
-      nota = await pedirTexto('Respuesta de CEFAFA', 'Comentario (opcional, queda en el historial de cada solicitud)', { minimo: 0 });
+      const nota = await pedirTexto('Respuesta de CEFAFA', 'Comentario (opcional, queda en el historial de cada solicitud)', { minimo: 0 });
       if (nota === null) return;
       try { const n = await rpc('responder_cefafa', { p_ids: it.ids, p_respuesta: respuesta, p_producto: producto, p_nota: nota }); toast(`${n} solicitud(es) actualizada(s)`); pintar(); }
       catch (e) { error(e); }
     };
     raiz.replaceChildren(
-      h('section', { class: 'tarjeta' }, h('h2', {}, 'Consulta periódica de disponibilidad a CEFAFA'),
-        h('p', { class: 'nota' }, 'SIGAM envía un correo con los medicamentos "Ya gestionado" y "Sin disponibilidad", agrupados por producto, sin datos de beneficiarios. CEFAFA responde por correo y aquí se registra la respuesta.'),
-        h('div', { class: 'rejilla-2' }, campo('Correo(s) de CEFAFA', dest), campo('Copia', copia)),
-        h('div', { class: 'filtros' }, campo('Frecuencia', frec), campo('Próximo envío', prox, 'Puede cambiarla'),
-          h('label', { class: 'casilla' }, activo, ' Envío automático activo'),
-          h('div', { class: 'fila-campo' }, h('span', {}, '\u00a0'), h('button', { class: 'btn btn-sec', onclick: async () => {
-            try { await rpc('guardar_config_cefafa', { p: { destinatarios: dest.value, copia: copia.value, frecuencia_dias: frec.value, proximo_envio: prox.value, activo: activo.checked } }); toast('Configuración guardada'); pintar(); }
-            catch (e) { error(e); }
-          } }, 'Guardar'))),
-        h('p', { class: 'nota' }, c.ultimo_envio ? `Último envío: ${fechaHora(c.ultimo_envio)}.` : 'Aún no se ha enviado.')),
       h('section', { class: 'tarjeta' },
-        h('div', { class: 'botones' }, h('h2', {}, `Medicamentos por consultar (${items.length})`), h('span', { class: 'espacio' }),
-          h('button', { class: 'btn btn-sec btn-peq', onclick: () => exportarExcel('SIGAM_consulta_CEFAFA', [{ titulo: 'CEFAFA', cols: [{ t: 'Código', k: 'codigo' }, { t: 'Medicamento', k: 'producto' },
-            { t: 'Principio activo', k: 'principio_activo' }, { t: 'Presentación', k: 'presentacion' }, { t: 'Cantidad', k: 'cantidad' }, { t: 'Personas', k: 'personas' }, { t: 'Sedes', k: 'sedes' }], filas: items }]) }, '⬇ Excel'),
-          h('button', { class: 'btn btn-primario btn-peq', onclick: async () => {
-            if (!await confirmar('Enviar ahora a CEFAFA', `Se enviará la consulta de ${items.length} medicamento(s) a ${(c.destinatarios || []).join(', ') || '(sin correo configurado)'} y la fecha del próximo envío se moverá.`, 'Enviar')) return;
-            try { const n = await rpc('enviar_resumen_cefafa', { p_forzar: true }); dispararCorreos(); toast(n ? `Consulta enviada (${n} medicamentos)` : 'No hay medicamentos por consultar'); pintar(); } catch (e) { error(e); }
-          } }, '📧 Enviar ahora')),
+        h('div', { class: 'botones' }, h('h2', {}, `1 · Por solicitar a CEFAFA (${porSolicitar.length})`), h('span', { class: 'espacio' }),
+          h('button', { class: 'btn btn-sec btn-peq', onclick: () => { porSolicitar.forEach(x => sel.add(x.clave)); pintarCasillas(); } }, 'Todos'),
+          h('button', { class: 'btn btn-sec btn-peq', onclick: () => { sel.clear(); pintarCasillas(); } }, 'Ninguno'),
+          h('button', { class: 'btn btn-primario btn-peq', onclick: redactar }, '📝 Redactar correo')),
+        h('p', { class: 'nota' }, 'Medicamentos en "Solicitado", agrupados por producto. Seleccione los que pedirá; SIGAM redacta el correo para que la jefatura lo envíe, y al copiarlo pasan a "Ya gestionado con CEFAFA".'),
+        h('div', { class: 'botones' }, h('label', { class: 'casilla' }, chkSin, ' Incluir los que CEFAFA no tenía (volver a consultar)'), h('span', { class: 'espacio' }), contador),
+        h('div', { class: 'tabla-sel' }),
+      ),
+      h('section', { class: 'tarjeta' },
+        h('div', { class: 'botones' }, h('h2', {}, `2 · Respuesta de CEFAFA (${gestionados.length})`), h('span', { class: 'espacio' }),
+          h('button', { class: 'btn btn-sec btn-peq', onclick: () => exportarExcel('SIGAM_gestionados_CEFAFA', [{ titulo: 'CEFAFA', cols: [{ t: 'Código', k: 'codigo' }, { t: 'Medicamento', k: 'producto' },
+            { t: 'Principio activo', k: 'principio_activo' }, { t: 'Presentación', k: 'presentacion' }, { t: 'Cantidad', k: 'cantidad' }, { t: 'Personas', k: 'personas' }, { t: 'Sedes', k: 'sedes' }], filas: gestionados }]) }, '⬇ Excel')),
         h('p', { class: 'nota' }, 'Cuando CEFAFA responda, registre por producto: se actualizan todas las solicitudes del grupo.'),
         tabla([
           { t: 'Medicamento', f: it => h('div', {}, h('strong', {}, it.producto), h('div', { class: 'nota' }, [it.codigo, it.principio_activo, it.presentacion].filter(Boolean).join(' · '))) },
           { t: 'Cantidad', f: it => num(it.cantidad), num: true }, { t: 'Personas', k: 'personas', num: true }, { t: 'Sedes', k: 'sedes' },
-          { t: 'Estado', f: it => it.sin_disponibilidad ? h('span', { class: 'estado c-azul' }, `${it.sin_disponibilidad} sin disponibilidad`) : h('span', { class: 'estado c-amarillo' }, 'Ya gestionado') },
+          { t: 'Estado', f: it => it.sin_disponibilidad ? h('span', { class: 'estado c-azul' }, `${it.sin_disponibilidad} sin disponibilidad`)
+              : it.espera_jd ? h('span', { class: 'estado c-morado' }, `${it.espera_jd} en espera de JD`) : h('span', { class: 'estado c-amarillo' }, 'Ya gestionado con CEFAFA') },
           { t: 'Respuesta de CEFAFA', f: it => h('div', { class: 'botones botones-llamada' },
-            h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, 'hay'); } }, '✔ Hay'),
-            h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, 'no_hay'); } }, '✖ No hay'),
-            h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, 'alterno'); } }, '↔ Alterno'),
-            h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, 'jd'); } }, '⏳ JD'),
-            h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, 'no_disponible'); } }, 'No disponible')) },
-        ], items, { vacio: 'No hay medicamentos "Ya gestionado" o "Sin disponibilidad" por consultar' })));
+            ...[['hay', '✔ Hay'], ['no_hay', '✖ No hay'], ['alterno', '↔ Alterno'], ['jd', '⏳ JD'], ['no_disponible', 'No disponible']].map(([k, tx]) =>
+              h('button', { class: 'btn btn-sec btn-peq', onclick: e => { e.stopPropagation(); responder(it, k); } }, tx))) },
+        ], gestionados, { vacio: 'No hay medicamentos gestionados esperando respuesta' })),
+      h('section', { class: 'tarjeta' }, h('h2', {}, '🔔 Recordatorio'),
+        h('p', { class: 'nota' }, 'En la fecha indicada, SIGAM avisa por correo a DSIN de medicamentos que toca redactar la solicitud a CEFAFA (si hay medicamentos en "Solicitado"). Al copiar el correo la fecha avanza sola según la frecuencia.'),
+        h('div', { class: 'filtros' }, campo('Frecuencia', frec), campo('Próxima solicitud', prox, 'Puede cambiarla'),
+          h('label', { class: 'casilla' }, activo, ' Recordatorio activo'),
+          h('div', { class: 'fila-campo' }, h('span', {}, ' '), h('button', { class: 'btn btn-sec', onclick: async () => {
+            try { await rpc('guardar_config_cefafa', { p: { frecuencia_dias: frec.value, proximo_envio: prox.value, activo: activo.checked } }); toast('Recordatorio guardado'); pintar(); }
+            catch (e) { error(e); }
+          } }, 'Guardar'))),
+        h('p', { class: 'nota' }, c.ultimo_envio ? `Última solicitud redactada: ${fechaHora(c.ultimo_envio)}.` : 'Aún no se ha redactado ninguna solicitud.')));
+    const pintarCasillas = () => {
+      raiz.querySelector('.tabla-sel').replaceChildren(tabla([
+        { t: '', f: casilla, ancho: '28px' },
+        { t: 'Medicamento', f: it => h('div', {}, h('strong', {}, it.producto), h('div', { class: 'nota' }, [it.codigo, it.principio_activo, it.presentacion].filter(Boolean).join(' · '))) },
+        { t: 'Cantidad', f: it => num(it.cantidad), num: true }, { t: 'Personas', k: 'personas', num: true }, { t: 'Sedes', k: 'sedes' },
+        { t: 'Desde', f: it => fecha(it.desde) },
+        { t: 'Estado', f: it => it.sin_disponibilidad ? h('span', { class: 'estado c-azul' }, 'CEFAFA no tenía') : h('span', { class: 'estado c-rojo' }, 'Solicitado') },
+      ], porSolicitar, { vacio: 'No hay medicamentos en "Solicitado" por pedir a CEFAFA' }));
+      actualizar();
+    };
+    pintarCasillas();
   };
   await pintar();
   return raiz;

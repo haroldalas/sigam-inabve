@@ -399,3 +399,5 @@ a.tel { color: var(--azul); font-weight: 600; text-decoration: none; white-space
 .tabla-permisos { margin-top: 6px; }
 .tabla-permisos td, .tabla-permisos th { text-align: center; padding: 4px 10px; }
 .tabla-permisos td:first-child, .tabla-permisos th:first-child { text-align: left; }
+.correo-vista { border: 1px solid var(--borde); border-radius: 8px; padding: 12px; background: #fff; max-height: 55vh; overflow: auto; }
+.correo-vista table { width: 100%; }
